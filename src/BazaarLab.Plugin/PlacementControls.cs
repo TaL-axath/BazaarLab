@@ -284,6 +284,8 @@ public sealed partial class Plugin
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
             };
             var process = new Process { StartInfo = start, EnableRaisingEvents = false };
             process.OutputDataReceived += (_, args) =>

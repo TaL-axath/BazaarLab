@@ -8,10 +8,13 @@ using System.Text;
 using System.Text.Json;
 using BazaarGameClient.Domain.Models.Cards;
 using BazaarGameShared.Domain.Cards;
+using BazaarGameShared.Domain.Cards.Interfaces;
 using BazaarGameShared.Domain.Cards.Item;
 using BazaarGameShared.Domain.Cards.PlayerEffects;
 using BazaarGameShared.Domain.Cards.Skill;
+using BazaarGameShared.Domain.Core.Types;
 using BazaarGameShared.Domain.Players;
+using BazaarPlusPlus.Game.PvpBattles;
 using BepInEx;
 using TheBazaar;
 using UnityEngine;
@@ -43,6 +46,66 @@ public sealed partial class Plugin
     private float _encounterPreviewChangedAt;
     private float _nextEncounterPreviewProbeAt;
     private bool _encounterPreviewCombatSuppressed;
+    private readonly Dictionary<Guid, MonsterEncounterIdentity> _knownMonsterEncounters =
+        new Dictionary<Guid, MonsterEncounterIdentity>();
+    private MonsterCalibrationStore _monsterCalibrations = new MonsterCalibrationStore();
+
+    private sealed class MonsterEncounterIdentity
+    {
+        public Guid EncounterId { get; set; }
+        public Guid MonsterId { get; set; }
+        public TMonster Monster { get; set; } = null!;
+    }
+
+    private sealed class MonsterCardPayload
+    {
+        public string instance_id { get; set; } = string.Empty;
+        public string template_id { get; set; } = string.Empty;
+        public string type { get; set; } = string.Empty;
+        public string size { get; set; } = string.Empty;
+        public string section { get; set; } = string.Empty;
+        public string? socket { get; set; }
+        public string name { get; set; } = string.Empty;
+        public string tier { get; set; } = string.Empty;
+        public string enchant { get; set; } = string.Empty;
+        public string[] tags { get; set; } = Array.Empty<string>();
+        public Dictionary<string, int> attributes { get; set; } =
+            new Dictionary<string, int>(StringComparer.Ordinal);
+    }
+
+    private sealed class MonsterCalibrationStore
+    {
+        public string Schema { get; set; } = "bazaarlab-monster-calibrations-v1";
+        public string DataFingerprint { get; set; } = string.Empty;
+        public Dictionary<string, MonsterCalibrationRecord> Monsters { get; set; } =
+            new Dictionary<string, MonsterCalibrationRecord>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private sealed class MonsterCalibrationRecord
+    {
+        public string EncounterId { get; set; } = string.Empty;
+        public string MonsterId { get; set; } = string.Empty;
+        public uint Day { get; set; }
+        public uint Hour { get; set; }
+        public string ObservedAtUtc { get; set; } = string.Empty;
+        public Dictionary<string, int> OpponentAttributes { get; set; } =
+            new Dictionary<string, int>(StringComparer.Ordinal);
+        public List<MonsterCalibrationCard> Cards { get; set; } =
+            new List<MonsterCalibrationCard>();
+    }
+
+    private sealed class MonsterCalibrationCard
+    {
+        public string TemplateId { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
+        public string Section { get; set; } = string.Empty;
+        public string? Socket { get; set; }
+        public string Tier { get; set; } = string.Empty;
+        public string Enchant { get; set; } = string.Empty;
+        public string[] Tags { get; set; } = Array.Empty<string>();
+        public Dictionary<string, int> Attributes { get; set; } =
+            new Dictionary<string, int>(StringComparer.Ordinal);
+    }
 
     private bool IsEncounterPreviewCalculating => _encounterPreviewProcess is not null ||
         _encounterPreviewQueue.Count > 0;
@@ -50,6 +113,7 @@ public sealed partial class Plugin
     private void InitializeEncounterPreviewControls()
     {
         _encounterPreviewChangedAt = Time.realtimeSinceStartup;
+        LoadMonsterCalibrations();
     }
 
     private void DisposeEncounterPreviewControls()
@@ -169,6 +233,12 @@ public sealed partial class Plugin
                 Controller = controller,
                 Monster = monster,
             });
+            _knownMonsterEncounters[card.TemplateId] = new MonsterEncounterIdentity
+            {
+                EncounterId = card.TemplateId,
+                MonsterId = monster.Id,
+                Monster = monster,
+            };
         }
         if (resolved.Count == 0 &&
             (_encounterPreviews.Count > 0 || IsEncounterPreviewCalculating))
@@ -307,7 +377,14 @@ public sealed partial class Plugin
     {
         var player = Data.Run.Player;
         TPlayer monster = entry.Monster.Player;
+        var materializationWarnings = new List<string>();
+        MonsterCalibrationRecord? calibration = GetApplicableMonsterCalibration(entry);
         Dictionary<string, int> opponentAttributes = ConvertAttributes(monster.Attributes);
+        if (calibration is not null)
+        {
+            opponentAttributes = new Dictionary<string, int>(
+                calibration.OpponentAttributes, StringComparer.Ordinal);
+        }
         if (!opponentAttributes.ContainsKey("Health") &&
             opponentAttributes.TryGetValue("HealthMax", out int opponentHealthMax))
         {
@@ -317,12 +394,30 @@ public sealed partial class Plugin
             player.Hand.GetItemsAsEnumerable().OfType<Card>());
         object playerSkills = ConvertLiveSet("PlayerSkills", 0, "Skills",
             player.Skills.Cast<Card>());
-        object opponentHand = ConvertMonsterItems(entry, monster.Hand.Items);
-        object opponentSkills = ConvertMonsterSkills(entry, monster.Skills, monster.Effects);
+        object opponentHand = ConvertMonsterItems(entry, monster.Hand.Items,
+            materializationWarnings, calibration);
+        object opponentSkills = ConvertMonsterSkills(entry, monster.Skills, monster.Effects,
+            materializationWarnings, calibration);
+        var inputWarnings = new List<string>
+        {
+            "opponent is reconstructed with the game's tier materialization rules; result is an estimate"
+        };
+        inputWarnings.AddRange(materializationWarnings);
+        if (calibration is not null)
+        {
+            inputWarnings.Add("opponent opening attributes were calibrated from a previous observed combat");
+        }
         var document = new
         {
             schema = "bazaarlab-combat-snapshot-v1",
-            capture = new { plugin_version = PluginVersion, source = "static-monster-preview" },
+            capture = new
+            {
+                plugin_version = PluginVersion,
+                source = calibration is null
+                    ? "game-ui-tier-materialized-monster-preview"
+                    : "observed-monster-calibration",
+                monster_data_fingerprint = CurrentMonsterDataFingerprint(),
+            },
             battle = new
             {
                 id = "encounter-preview-" + entry.InstanceId,
@@ -341,12 +436,9 @@ public sealed partial class Plugin
                 prediction_ready = monster.Hand.Items.Count > 0 &&
                     opponentAttributes.TryGetValue("Health", out int health) && health > 0,
                 errors = Array.Empty<string>(),
-                warnings = new[] { "opponent is reconstructed from a static encounter template" },
+                warnings = inputWarnings.ToArray(),
             },
-            input_warnings = new[]
-            {
-                "opponent is reconstructed from a static encounter template; result is an estimate"
-            },
+            input_warnings = inputWarnings.ToArray(),
             combatants = new object[]
             {
                 new { id = "player", hero = player.Hero.ToString(),
@@ -360,56 +452,74 @@ public sealed partial class Plugin
     }
 
     private static object ConvertMonsterItems(EncounterPreviewEntry entry,
-        IEnumerable<TCardInstanceItem> items) => new
+        IEnumerable<TCardInstanceItem> items, ICollection<string> warnings,
+        MonsterCalibrationRecord? calibration) => new
     {
         label = "OpponentHand",
         owner = 1,
         section = "Hand",
         status = "Captured",
-        source = "StaticMonsterTemplate",
+        source = calibration is null ? "GameUiTierMaterialized" : "ObservedMonsterOpening",
         items = items.Select((item, index) => ConvertMonsterCard(entry, item,
-            "Item", "Hand", item.SocketId?.ToString(), item.EnchantmentType?.ToString(), index))
+            "Item", "Hand", item.SocketId?.ToString(), item.EnchantmentType?.ToString(), index,
+            warnings, calibration))
             .ToArray(),
     };
 
     private static object ConvertMonsterSkills(EncounterPreviewEntry entry,
         IEnumerable<TCardInstanceSkill> skills,
-        IEnumerable<TCardInstancePlayerEffect> effects) => new
+        IEnumerable<TCardInstancePlayerEffect> effects, ICollection<string> warnings,
+        MonsterCalibrationRecord? calibration) => new
     {
         label = "OpponentSkills",
         owner = 1,
         section = "Skills",
         status = "Captured",
-        source = "StaticMonsterTemplate",
+        source = calibration is null ? "GameUiTierMaterialized" : "ObservedMonsterOpening",
         items = skills.Select((skill, index) => ConvertMonsterCard(entry, skill,
-                "Skill", "Skills", null, null, index))
+                "Skill", "Skills", null, null, index, warnings, calibration))
             .Concat(effects.Select((effect, index) => ConvertMonsterCard(entry, effect,
-                "PlayerEffect", "Skills", null, null, 1000 + index))).ToArray(),
+                "PlayerEffect", "Skills", null, null, 1000 + index, warnings, calibration))).ToArray(),
     };
 
-    private static object ConvertMonsterCard(EncounterPreviewEntry entry,
-        object card, string type, string section, string? socket, string? enchant, int index)
+    private static MonsterCardPayload ConvertMonsterCard(EncounterPreviewEntry entry,
+        TCardInstance card, string type, string section, string? socket, string? enchant, int index,
+        ICollection<string> warnings, MonsterCalibrationRecord? calibration)
     {
-        Type cardType = card.GetType();
-        Guid templateId = (Guid)(cardType.GetProperty("TemplateId")?.GetValue(card) ?? Guid.Empty);
-        object? tier = cardType.GetProperty("Tier")?.GetValue(card);
-        object? attributes = cardType.GetProperty("Attributes")?.GetValue(card);
+        Guid templateId = card.TemplateId;
         ITCard? template = Data.GetStatic().GetCardById(templateId);
         string size = ReadProperty(template, "Size")?.ToString() ?? "Small";
         string name = ReadProperty(template, "InternalName")?.ToString() ?? string.Empty;
-        return new
+        string tier = ResolveMonsterTier(card.Tier, template);
+        Dictionary<string, int> attributes = MaterializeMonsterAttributes(
+            card, template, tier, enchant, name, warnings);
+        MonsterCalibrationCard? observed = calibration?.Cards.FirstOrDefault(candidate =>
+            string.Equals(candidate.TemplateId, templateId.ToString("D"),
+                StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(candidate.Type, type, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(candidate.Section, section, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(candidate.Socket ?? string.Empty, socket ?? string.Empty,
+                StringComparison.OrdinalIgnoreCase));
+        if (observed is not null)
+        {
+            attributes = new Dictionary<string, int>(observed.Attributes, StringComparer.Ordinal);
+            tier = observed.Tier;
+            enchant = observed.Enchant;
+        }
+        return new MonsterCardPayload
         {
             instance_id = "monster:" + entry.Monster.Id.ToString("D") + ":" + type + ":" + index,
             template_id = templateId.ToString("D"),
-            type,
-            size,
-            section,
-            socket,
-            name,
-            tier = ResolveMonsterTier(tier, template),
+            type = type,
+            size = size,
+            section = section,
+            socket = socket,
+            name = name,
+            tier = tier,
             enchant = enchant ?? string.Empty,
-            tags = ConvertTags(ReadProperty(card, "Tags") ?? ReadProperty(template, "Tags")),
-            attributes = ConvertAttributeObject(attributes),
+            tags = observed?.Tags ??
+                ConvertTags(ReadProperty(card, "Tags") ?? ReadProperty(template, "Tags")),
+            attributes = attributes,
         };
     }
 
@@ -428,6 +538,64 @@ public sealed partial class Plugin
         "Diamond" or "Legendary" => 3,
         _ => -1,
     };
+
+    private static Dictionary<string, int> MaterializeMonsterAttributes(
+        TCardInstance instance, ITCard? template, string resolvedTier, string? enchant,
+        string name, ICollection<string> warnings)
+    {
+        Dictionary<string, int> instanceAttributes = ConvertAttributeObject(instance.Attributes);
+        if (template is null || !Enum.TryParse(resolvedTier, out ETier tier))
+        {
+            warnings.Add("monster card could not be tier-materialized: " + name);
+            return instanceAttributes;
+        }
+        try
+        {
+            Card preview = DTOUtils.CreateCard(template.Id.ToString(), template.Type);
+            preview.Attributes = new Dictionary<ECardAttributeType, int>();
+            foreach (KeyValuePair<string, int> pair in instanceAttributes)
+            {
+                if (Enum.TryParse(pair.Key, out ECardAttributeType attribute))
+                    preview.Attributes[attribute] = pair.Value;
+            }
+            if (template is IHasTierData tiered)
+            {
+                foreach (KeyValuePair<ETier, TCardTier> tierData in tiered.Tiers)
+                {
+                    if (tierData.Key > template.StartingTier) break;
+                    foreach (KeyValuePair<ECardAttributeType, int> pair in tierData.Value.Attributes)
+                        preview.Attributes[pair.Key] = pair.Value;
+                }
+            }
+            preview.Tier = tier;
+            Dictionary<ECardAttributeType, int> materialized =
+                TheBazaar.CardExtensions.BuildAttributeDictionaryForTier(preview, template, tier);
+            if (preview is ItemCard previewItem && template is TCardItem itemTemplate &&
+                Enum.TryParse(enchant, out EEnchantmentType enchantment))
+            {
+                TheBazaar.CardExtensions.ApplyPreviewEnchantment(
+                    itemTemplate, previewItem, materialized, enchantment);
+            }
+            var result = materialized.ToDictionary(
+                pair => pair.Key.ToString(), pair => pair.Value, StringComparer.Ordinal);
+            foreach (KeyValuePair<string, int> pair in result)
+            {
+                if (instanceAttributes.TryGetValue(pair.Key, out int oldValue) &&
+                    oldValue != pair.Value)
+                {
+                    warnings.Add("tier materialization corrected " + name + "." + pair.Key +
+                        ": " + oldValue + " -> " + pair.Value);
+                }
+            }
+            return result;
+        }
+        catch (Exception exception)
+        {
+            warnings.Add("monster card tier materialization failed for " + name + ": " +
+                exception.GetType().Name);
+            return instanceAttributes;
+        }
+    }
 
     private static Dictionary<string, int> ConvertAttributeObject(object? attributes)
     {
@@ -450,6 +618,139 @@ public sealed partial class Plugin
             }
         }
         return result;
+    }
+
+    private string MonsterCalibrationPath() =>
+        Path.Combine(_outputDirectory, "monster-calibrations.json");
+
+    private string CurrentMonsterDataFingerprint()
+    {
+        string runtime = typeof(Data).Assembly.GetName().Version?.ToString() ?? "unknown";
+        try
+        {
+            var catalog = new FileInfo(GetCatalogFile());
+            return runtime + ":" + catalog.Length + ":" + catalog.LastWriteTimeUtc.Ticks;
+        }
+        catch (Exception)
+        {
+            return runtime;
+        }
+    }
+
+    private void LoadMonsterCalibrations()
+    {
+        string fingerprint = CurrentMonsterDataFingerprint();
+        try
+        {
+            string path = MonsterCalibrationPath();
+            if (File.Exists(path))
+            {
+                MonsterCalibrationStore? loaded = JsonSerializer.Deserialize<MonsterCalibrationStore>(
+                    File.ReadAllText(path), new JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true,
+                    });
+                if (loaded is not null &&
+                    string.Equals(loaded.DataFingerprint, fingerprint, StringComparison.Ordinal))
+                {
+                    _monsterCalibrations = loaded;
+                    return;
+                }
+                Logger.LogInfo("monster calibrations ignored because game/card data changed");
+            }
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning("monster calibrations could not be loaded: " + exception.Message);
+        }
+        _monsterCalibrations = new MonsterCalibrationStore { DataFingerprint = fingerprint };
+    }
+
+    private void SaveMonsterCalibrations()
+    {
+        _monsterCalibrations.DataFingerprint = CurrentMonsterDataFingerprint();
+        PublishAtomic("monster-calibrations.json", JsonSerializer.Serialize(
+            _monsterCalibrations, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private MonsterCalibrationRecord? GetApplicableMonsterCalibration(
+        EncounterPreviewEntry entry)
+    {
+        if (!_monsterCalibrations.Monsters.TryGetValue(entry.Monster.Id.ToString("D"),
+                out MonsterCalibrationRecord? calibration))
+            return null;
+        return MonsterLineupMatches(entry.Monster, calibration.Cards) ? calibration : null;
+    }
+
+    private static bool MonsterLineupMatches(TMonster monster,
+        IEnumerable<MonsterCalibrationCard> observed)
+    {
+        string[] expected = monster.Player.Hand.Items.Cast<TCardInstance>()
+            .Concat(monster.Player.Skills.Cast<TCardInstance>())
+            .Concat(monster.Player.Effects.Cast<TCardInstance>())
+            .Select(card => card.TemplateId.ToString("D") + "|" +
+                ResolveMonsterTier(card.Tier, Data.GetStatic().GetCardById(card.TemplateId)))
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray();
+        string[] actual = observed.Select(card => card.TemplateId + "|" + card.Tier)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray();
+        return expected.SequenceEqual(actual, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void TryRecordMonsterOpeningCalibration(PvpBattleSnapshots snapshots,
+        IReadOnlyDictionary<string, int> opponentAttributes, uint day, uint hour)
+    {
+        var cards = new List<MonsterCalibrationCard>();
+        AddObservedCards(cards, snapshots.OpponentHand, "Hand");
+        AddObservedCards(cards, snapshots.OpponentSkills, "Skills");
+        if (cards.Count == 0) return;
+        MonsterEncounterIdentity? identity = null;
+        Guid? encounterId = Data.CurrentEncounterId;
+        if (encounterId.HasValue)
+            _knownMonsterEncounters.TryGetValue(encounterId.Value, out identity);
+        if (identity is null || !MonsterLineupMatches(identity.Monster, cards))
+        {
+            identity = _knownMonsterEncounters.Values.FirstOrDefault(candidate =>
+                MonsterLineupMatches(candidate.Monster, cards));
+        }
+        if (identity is null)
+        {
+            Logger.LogWarning("monster opening did not match the selected static lineup; " +
+                "calibration was not saved");
+            return;
+        }
+        var record = new MonsterCalibrationRecord
+        {
+            EncounterId = identity.EncounterId.ToString("D"),
+            MonsterId = identity.MonsterId.ToString("D"),
+            Day = day,
+            Hour = hour,
+            ObservedAtUtc = DateTime.UtcNow.ToString("O"),
+            OpponentAttributes = new Dictionary<string, int>(
+                opponentAttributes, StringComparer.Ordinal),
+            Cards = cards,
+        };
+        _monsterCalibrations.Monsters[record.MonsterId] = record;
+        SaveMonsterCalibrations();
+        Logger.LogInfo("saved observed monster opening calibration: " + record.MonsterId);
+    }
+
+    private static void AddObservedCards(ICollection<MonsterCalibrationCard> target,
+        PvpBattleCardSetCapture set, string fallbackSection)
+    {
+        foreach (PvpBattleCardSnapshot card in set.Items)
+        {
+            target.Add(new MonsterCalibrationCard
+            {
+                TemplateId = card.TemplateId,
+                Type = card.Type.ToString(),
+                Section = card.Section?.ToString() ?? fallbackSection,
+                Socket = card.Socket?.ToString(),
+                Tier = card.Tier ?? "Bronze",
+                Enchant = card.Enchant ?? string.Empty,
+                Tags = card.Tags.ToArray(),
+                Attributes = new Dictionary<string, int>(card.Attributes, StringComparer.Ordinal),
+            });
+        }
     }
 
     private static string[] ConvertTags(object? tags) => tags is System.Collections.IEnumerable values

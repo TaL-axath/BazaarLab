@@ -1,6 +1,12 @@
 ﻿using System.Text.Json;
 using System.Globalization;
+using System.Text;
 using BazaarLab.Combat;
+
+// Progress is read from a redirected pipe by the Unity plugin. Make the pipe encoding
+// explicit so Windows never decodes Chinese text through an OEM/ANSI code page.
+Console.OutputEncoding = Encoding.UTF8;
+Console.InputEncoding = Encoding.UTF8;
 
 if (args.Length is not (3 or 4))
 {

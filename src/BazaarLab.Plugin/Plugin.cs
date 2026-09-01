@@ -22,7 +22,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "com.bazaarlab.plugin";
     public const string PluginName = "BazaarLab";
-    public const string PluginVersion = "1.0.3";
+    public const string PluginVersion = "1.0.4";
 
     private static Plugin? _instance;
     private Harmony? _harmony;
@@ -279,6 +279,8 @@ public sealed partial class Plugin : BaseUnityPlugin
             MergeAttributes(message.Data.Player.Attributes, Data.Run?.Player);
         Dictionary<string, int> opponentAttributes =
             MergeAttributes(message.Data.Opponent.Attributes, null);
+        TryRecordMonsterOpeningCalibration(snapshots, opponentAttributes,
+            message.Data.Run.Day, message.Data.Run.Hour);
         string captureId = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + "-" + message.MessageId;
         try
         {
