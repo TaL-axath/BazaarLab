@@ -19,6 +19,7 @@ public sealed partial class Plugin
 {
     private Process? _placementProcess;
     private string? _placementResultPath;
+    private string? _placementOptionsPath;
     private string? _placementInputFingerprint;
     private PlacementResultDto? _placementResult;
     private string _placementStatus = "就绪";
@@ -216,6 +217,19 @@ public sealed partial class Plugin
             string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff");
             _placementResultPath = Path.Combine(_outputDirectory,
                 "placement-result-" + stamp + ".json");
+            if (!TryGetContiguousUnlockedBoardRange(current.Unlocked,
+                    out int boardMinimum, out int boardMaximum, out error))
+            {
+                SetPlacementStatus("无法确定可用棋盘范围：" + error);
+                return;
+            }
+            _placementOptionsPath = Path.Combine(_outputDirectory,
+                "placement-options-" + stamp + ".json");
+            File.WriteAllText(_placementOptionsPath, JsonSerializer.Serialize(new
+            {
+                BoardMinimumPosition = boardMinimum,
+                BoardMaximumPosition = boardMaximum,
+            }, new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
             _placementInputFingerprint = current.Fingerprint();
             _placementResult = null;
             _placementProcessLog = string.Empty;
@@ -227,7 +241,7 @@ public sealed partial class Plugin
             {
                 FileName = dotnetExecutable,
                 Arguments = Quote(runtime) + " " + Quote(catalog) + " " + Quote(input) + " " +
-                    Quote(_placementResultPath),
+                    Quote(_placementResultPath) + " " + Quote(_placementOptionsPath),
                 WorkingDirectory = Path.GetDirectoryName(runtime) ?? gameRoot,
                 UseShellExecute = false,
                 CreateNoWindow = true,
@@ -639,6 +653,37 @@ public sealed partial class Plugin
             return count > 0;
         }
         return false;
+    }
+
+    private static bool TryGetContiguousUnlockedBoardRange(bool[] unlocked,
+        out int minimum, out int maximum, out string error)
+    {
+        minimum = -1;
+        maximum = -1;
+        error = string.Empty;
+        if (unlocked.Length < 10)
+        {
+            error = "解锁槽位数据不完整";
+            return false;
+        }
+        for (int index = 0; index < 10; index++)
+        {
+            if (!unlocked[index]) continue;
+            if (minimum < 0) minimum = index;
+            maximum = index;
+        }
+        if (minimum < 0)
+        {
+            error = "没有已解锁的棋盘槽位";
+            return false;
+        }
+        for (int index = minimum; index <= maximum; index++)
+        {
+            if (unlocked[index]) continue;
+            error = "已解锁棋盘槽位不是连续区间，已拒绝生成不安全方案";
+            return false;
+        }
+        return true;
     }
 
     private void SetPlacementStatus(string status)

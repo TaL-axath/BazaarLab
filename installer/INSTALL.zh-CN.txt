@@ -1,4 +1,4 @@
-BazaarLab 1.0.0 安装说明
+BazaarLab 1.0.1 安装说明
 ========================
 
 1. 完整解压 ZIP 文件，不能只从压缩包预览窗口运行安装器。
@@ -23,7 +23,7 @@ BepInEx）”并使用 BPP 官方安装器即可。缺少 .NET 8 时，可以使
 --------
 
 - 安装位置：BepInEx\plugins\BazaarLab
-- 已有 BazaarLab 会备份为 BazaarLab.backup-日期时间
+- 已有 BazaarLab 会备份到 BepInEx\config\BazaarLab\install-backups，避免被 BepInEx 当作重复插件加载
 - 旧 LookingIN.LocalCapture 插件会被停用并保留备份
 - 玩家配置和历史数据不会被删除
 - 所有载荷文件在安装前后都会进行 SHA-256 校验

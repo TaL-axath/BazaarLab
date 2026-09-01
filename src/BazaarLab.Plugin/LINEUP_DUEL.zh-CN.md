@@ -22,6 +22,9 @@ Base64URL 编码。码内保存英雄属性、场上物品、技能、槽位、�
 缓存位于 `BepInEx/config/BazaarLab/`。因此退出一局或重启游戏后，
 仍能导出最近一次稳定阵容。
 
+标题栏的“打开历史目录”按钮在展开和最小化状态下都常驻可用，会直接打开
+`BepInEx/config/BazaarLab/pvp-lineups/`。其中按本轮游戏和天数保存玩家、对手阵容码。
+
 ## 使用
 
 展开左上角 `Local Lineup Duel`：

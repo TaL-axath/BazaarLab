@@ -52,7 +52,7 @@ namespace BazaarLab.Installer
 
     internal sealed class InstallerForm : Form
     {
-        private const string InstallerVersion = "1.0.0";
+        private const string InstallerVersion = "1.0.1";
         private const string BppUrl = "https://github.com/BazaarPlusPlus/BazaarPlusPlus";
         private const string DotNetUrl = "https://dotnet.microsoft.com/download/dotnet/8.0";
 
@@ -501,11 +501,16 @@ namespace BazaarLab.Installer
             EnsureChildPath(pluginsRoot, destination);
             string token = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff", CultureInfo.InvariantCulture);
             string staging = Path.Combine(pluginsRoot, ".BazaarLab.installing-" + Guid.NewGuid().ToString("N"));
-            string backup = Path.Combine(pluginsRoot, "BazaarLab.backup-" + token);
+            string backupRoot = Path.GetFullPath(Path.Combine(gameRoot, "BepInEx", "config",
+                "BazaarLab", "install-backups"));
+            string backup = Path.Combine(backupRoot, "BazaarLab-" + token);
             string legacy = Path.Combine(pluginsRoot, "LookingIN.LocalCapture");
-            string legacyBackup = Path.Combine(pluginsRoot, "LookingIN.LocalCapture.disabled-" + token);
+            string legacyBackup = Path.Combine(backupRoot,
+                "LookingIN.LocalCapture-disabled-" + token);
             EnsureChildPath(pluginsRoot, staging);
-            EnsureChildPath(pluginsRoot, backup);
+            Directory.CreateDirectory(backupRoot);
+            EnsureChildPath(backupRoot, backup);
+            MoveLegacyPluginBackups(pluginsRoot, backupRoot, log);
 
             log("正在复制并校验安装载荷…");
             CopyDirectory(payloadPlugin, staging);
@@ -527,7 +532,7 @@ namespace BazaarLab.Installer
                 Directory.Move(staging, destination);
                 string receipt = Path.Combine(destination, "install-receipt.txt");
                 File.WriteAllText(receipt,
-                    "BazaarLab 1.0.0" + Environment.NewLine +
+                    "BazaarLab 1.0.1" + Environment.NewLine +
                     "InstalledAt=" + DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture) +
                     Environment.NewLine + "GameRoot=" + gameRoot + Environment.NewLine,
                     new UTF8Encoding(false));
@@ -543,7 +548,25 @@ namespace BazaarLab.Installer
                 catch { }
                 throw;
             }
-            return "BazaarLab 1.0.0 已安装到：" + destination;
+            return "BazaarLab 1.0.1 已安装到：" + destination;
+        }
+
+        private static void MoveLegacyPluginBackups(string pluginsRoot, string backupRoot,
+            Action<string> log)
+        {
+            foreach (string directory in Directory.GetDirectories(pluginsRoot,
+                "BazaarLab.backup-*", SearchOption.TopDirectoryOnly))
+            {
+                string name = Path.GetFileName(directory);
+                string target = Path.Combine(backupRoot, name);
+                int suffix = 1;
+                while (Directory.Exists(target))
+                    target = Path.Combine(backupRoot, name + "-" + suffix++);
+                EnsureChildPath(pluginsRoot, directory);
+                EnsureChildPath(backupRoot, target);
+                Directory.Move(directory, target);
+                log("已将旧插件备份移出 BepInEx 扫描目录：" + target);
+            }
         }
 
         private static void VerifyManifest(string payloadRoot, string manifestPath, Action<string> log)

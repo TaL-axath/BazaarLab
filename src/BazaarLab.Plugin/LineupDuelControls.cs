@@ -250,13 +250,16 @@ public sealed partial class Plugin
 
     private void DrawLineupDuelWindow(int windowId)
     {
+        if (GUI.Button(new Rect(LineupWindowWidth - 292f, 3f, 126f, 21f),
+                "打开历史目录"))
+            OpenLineupHistoryDirectory();
         if (GUI.Button(new Rect(LineupWindowWidth - 158f, 3f, 126f, 21f),
                 "复制当前阵容"))
             CopyPreferredLineup();
         if (GUI.Button(new Rect(LineupWindowWidth - 28f, 3f, 24f, 21f),
                 _lineupWindowMinimized ? "+" : "-"))
             _lineupWindowMinimized = !_lineupWindowMinimized;
-        GUI.DragWindow(new Rect(0f, 0f, LineupWindowWidth - 162f, 25f));
+        GUI.DragWindow(new Rect(0f, 0f, LineupWindowWidth - 296f, 25f));
         if (_lineupWindowMinimized) return;
 
         GUILayout.BeginArea(new Rect(10f, 27f, LineupWindowWidth - 20f, 484f));
@@ -317,6 +320,29 @@ public sealed partial class Plugin
         }
         GUILayout.EndScrollView();
         GUILayout.EndArea();
+    }
+
+    private void OpenLineupHistoryDirectory()
+    {
+        try
+        {
+            string directory = Path.Combine(_outputDirectory, "pvp-lineups");
+            Directory.CreateDirectory(directory);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = directory,
+                UseShellExecute = true,
+            });
+            _lineupStatus = "已打开本地 PvP 历史阵容码目录";
+            ShowLineupClipboardToast("已打开历史目录", true);
+        }
+        catch (Exception exception)
+        {
+            _lineupStatus = "无法打开历史目录：" + exception.Message;
+            ShowLineupClipboardToast("无法打开历史目录", false);
+            Logger.LogWarning("opening PvP lineup history directory failed: " +
+                exception.Message);
+        }
     }
 
     private void ClearLineupDuelInputs()
