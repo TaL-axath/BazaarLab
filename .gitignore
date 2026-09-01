@@ -1,0 +1,15 @@
+**/bin/
+**/obj/
+.vs/
+.idea/
+artifacts/
+runtime/
+data/
+*.user
+*.suo
+*.dll
+*.pdb
+*.exe
+*.jsonl
+placement-smoke.json
+src/BazaarLab.Combat/README.zh-CN.md

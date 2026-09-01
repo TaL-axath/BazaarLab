@@ -1,0 +1,382 @@
+﻿using System.Text.Json;
+
+namespace BazaarLab.Combat;
+
+public sealed record BppMonteCarloCase(
+    string BattleId,
+    string? Actual,
+    string? Predicted,
+    bool Match,
+    int PlayerWins,
+    int OpponentWins,
+    int Draws,
+    double PlayerWinRate,
+    double PlayerOutcomeProbability,
+    double DecisiveRate,
+    double ConservativePlayerProbabilityLower95,
+    double ConservativePlayerProbabilityUpper95,
+    string? ConfidentPrediction,
+    bool ConfidentMatch,
+    IReadOnlyDictionary<string, int> UnsupportedActions,
+    string? Error);
+
+public sealed record BppMonteCarloReport(
+    int Total,
+    int SamplesPerBattle,
+    int Decided,
+    int Matches,
+    double Accuracy,
+    int ConfidentDecided,
+    int ConfidentMatches,
+    double ConfidentAccuracy,
+    double BrierScore,
+    double LogLoss,
+    IReadOnlyDictionary<string, int> UnsupportedActions,
+    IReadOnlyList<BppMonteCarloCase> Cases);
+
+public sealed record BppPredictionResult(
+    string BattleId,
+    int Samples,
+    int PlayerWins,
+    int OpponentWins,
+    int Draws,
+    double PlayerWinRate,
+    double PlayerOutcomeProbability,
+    double DecisiveRate,
+    double ConservativePlayerProbabilityLower95,
+    double ConservativePlayerProbabilityUpper95,
+    string? ConfidentPrediction,
+    bool StoppedEarly,
+    string? Predicted,
+    IReadOnlyDictionary<string, int> UnsupportedActions,
+    bool PredictionReady,
+    IReadOnlyList<string> ValidationErrors,
+    IReadOnlyList<string> ValidationWarnings,
+    IReadOnlyList<string> SkippedCards);
+
+public static class BppMonteCarloDifferential
+{
+    public static BppPredictionResult Predict(
+        string snapshotPath,
+        OfficialCardCatalog catalog,
+        int baseSeed,
+        int samples,
+        int maximumTicks) => PredictCore(
+            snapshotPath, catalog, baseSeed, samples, samples, samples,
+            maximumTicks, adaptive: false);
+
+    public static BppPredictionResult PredictAdaptive(
+        string snapshotPath,
+        OfficialCardCatalog catalog,
+        int baseSeed,
+        int minimumSamples,
+        int maximumSamples,
+        int batchSamples,
+        int maximumTicks)
+    {
+        if (minimumSamples <= 0 || maximumSamples < minimumSamples || batchSamples <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(minimumSamples),
+                "adaptive samples require 0 < minimum <= maximum and batch > 0");
+        }
+        return PredictCore(snapshotPath, catalog, baseSeed, minimumSamples,
+            maximumSamples, batchSamples, maximumTicks, adaptive: true);
+    }
+
+    private static BppPredictionResult PredictCore(
+        string snapshotPath,
+        OfficialCardCatalog catalog,
+        int baseSeed,
+        int minimumSamples,
+        int maximumSamples,
+        int batchSamples,
+        int maximumTicks,
+        bool adaptive)
+    {
+        string battleId = Path.GetFileNameWithoutExtension(snapshotPath);
+        BppSnapshotValidationReport validation =
+            BppSnapshotValidator.ValidateLive(snapshotPath, catalog);
+        if (!validation.PredictionReady)
+        {
+            return new BppPredictionResult(
+                battleId, 0, 0, 0, 0,
+                0, 0, 0, 0, 1, null, false, null,
+                new Dictionary<string, int>(StringComparer.Ordinal),
+                false, validation.Errors, validation.Warnings, Array.Empty<string>());
+        }
+        int playerWins = 0;
+        int opponentWins = 0;
+        int draws = 0;
+        int completedSamples = 0;
+        bool stoppedEarly = false;
+        var unsupported = new Dictionary<string, int>(StringComparer.Ordinal);
+        var skippedCards = new HashSet<string>(StringComparer.Ordinal);
+        for (int sample = 0; sample < maximumSamples; sample++)
+        {
+            BppSnapshotImportResult imported = BppCombatSnapshotAdapter.Import(snapshotPath, catalog);
+            battleId = imported.BattleId ?? battleId;
+            foreach (string skippedCard in imported.SkippedCards)
+            {
+                skippedCards.Add(skippedCard);
+            }
+            CombatSimulationResult simulation = CombatSimulation.RunIndexed(
+                imported.State, unchecked((uint)baseSeed), sample, maximumTicks);
+            if (simulation.WinnerId == "player") playerWins++;
+            else if (simulation.WinnerId == "opponent") opponentWins++;
+            else draws++;
+            completedSamples = sample + 1;
+            foreach ((string action, int count) in simulation.UnsupportedActions)
+            {
+                unsupported[action] = unsupported.GetValueOrDefault(action) + count;
+            }
+            bool checkpoint = completedSamples == minimumSamples ||
+                completedSamples == maximumSamples ||
+                completedSamples > minimumSamples &&
+                    (completedSamples - minimumSamples) % batchSamples == 0;
+            if (adaptive && checkpoint && completedSamples >= minimumSamples &&
+                ClassifyConfidence(playerWins, draws, completedSamples) is not null &&
+                completedSamples < maximumSamples)
+            {
+                stoppedEarly = true;
+                break;
+            }
+        }
+        string? predicted = playerWins == opponentWins
+            ? null
+            : playerWins > opponentWins ? "win" : "loss";
+        double playerWinRate = Rate(playerWins, completedSamples);
+        (double lower, _) = WilsonInterval(playerWins, completedSamples);
+        (_, double upper) = WilsonInterval(playerWins + draws, completedSamples);
+        string[] runtimeErrors = skippedCards
+            .Select(card => "skipped card: " + card)
+            .Concat(unsupported.Keys.Select(action => "unsupported action: " + action))
+            .ToArray();
+        return new BppPredictionResult(
+            battleId, completedSamples, playerWins, opponentWins, draws,
+            playerWinRate,
+            OutcomeProbability(playerWins, draws, completedSamples),
+            Rate(playerWins + opponentWins, completedSamples),
+            lower,
+            upper,
+            ClassifyConfidence(playerWins, draws, completedSamples),
+            stoppedEarly,
+            predicted, unsupported,
+            runtimeErrors.Length == 0,
+            runtimeErrors, validation.Warnings, skippedCards.ToArray());
+    }
+
+    public static BppMonteCarloReport Run(
+        string directory,
+        OfficialCardCatalog catalog,
+        int baseSeed,
+        int samples,
+        int maximumTicks)
+    {
+        var cases = new List<BppMonteCarloCase>();
+        foreach (string path in Directory.EnumerateFiles(directory, "*.json")
+            .OrderBy(value => value, StringComparer.Ordinal))
+        {
+            string battleId = Path.GetFileNameWithoutExtension(path);
+            string? actual = null;
+            int playerWins = 0;
+            int opponentWins = 0;
+            int draws = 0;
+            var unsupported = new Dictionary<string, int>(StringComparer.Ordinal);
+            try
+            {
+                for (int sample = 0; sample < samples; sample++)
+                {
+                    BppSnapshotImportResult imported = BppCombatSnapshotAdapter.Import(path, catalog);
+                    battleId = imported.BattleId ?? battleId;
+                    actual = imported.ActualResult;
+                    CombatSimulationResult simulation = CombatSimulation.RunIndexed(
+                        imported.State, unchecked((uint)baseSeed), sample, maximumTicks);
+                    if (simulation.WinnerId == "player") playerWins++;
+                    else if (simulation.WinnerId == "opponent") opponentWins++;
+                    else draws++;
+                    foreach ((string action, int count) in simulation.UnsupportedActions)
+                    {
+                        unsupported[action] = unsupported.GetValueOrDefault(action) + count;
+                    }
+                }
+                string? predicted = playerWins == opponentWins
+                    ? null
+                    : playerWins > opponentWins ? "win" : "loss";
+                double playerWinRate = Rate(playerWins, samples);
+                double outcomeProbability = OutcomeProbability(
+                    playerWins, draws, samples);
+                double decisiveRate = Rate(playerWins + opponentWins, samples);
+                (double lower, _) = WilsonInterval(playerWins, samples);
+                (_, double upper) = WilsonInterval(playerWins + draws, samples);
+                string? confidentPrediction = ClassifyConfidence(
+                    playerWins, draws, samples);
+                cases.Add(new BppMonteCarloCase(
+                    battleId, actual, predicted,
+                    predicted is not null && predicted == actual,
+                    playerWins, opponentWins, draws,
+                    playerWinRate,
+                    outcomeProbability,
+                    decisiveRate,
+                    lower,
+                    upper,
+                    confidentPrediction,
+                    confidentPrediction is not null && confidentPrediction == actual,
+                    unsupported, null));
+            }
+            catch (Exception exception)
+            {
+                cases.Add(new BppMonteCarloCase(
+                    battleId, actual, null, false, playerWins, opponentWins, draws,
+                    Rate(playerWins, samples),
+                    OutcomeProbability(playerWins, draws, samples),
+                    Rate(playerWins + opponentWins, samples),
+                    WilsonInterval(playerWins, samples).Lower,
+                    WilsonInterval(playerWins + draws, samples).Upper,
+                    null, false,
+                    unsupported, exception.GetType().Name + ": " + exception.Message));
+            }
+        }
+        int decided = cases.Count(value => value.Predicted is not null);
+        int matches = cases.Count(value => value.Match);
+        int confidentDecided = cases.Count(value => value.ConfidentPrediction is not null);
+        int confidentMatches = cases.Count(value => value.ConfidentMatch);
+        List<BppMonteCarloCase> scored = cases.Where(value =>
+            value.Error is null && value.Actual is "win" or "loss").ToList();
+        double brierScore = scored.Count == 0 ? 0 : scored.Average(value =>
+        {
+            double actualValue = value.Actual == "win" ? 1.0 : 0.0;
+            double difference = value.PlayerOutcomeProbability - actualValue;
+            return difference * difference;
+        });
+        double logLoss = scored.Count == 0 ? 0 : scored.Average(value =>
+        {
+            double probability = Math.Clamp(
+                value.PlayerOutcomeProbability, 0.000001, 0.999999);
+            return value.Actual == "win"
+                ? -Math.Log(probability)
+                : -Math.Log(1.0 - probability);
+        });
+        Dictionary<string, int> allUnsupported = cases
+            .SelectMany(value => value.UnsupportedActions)
+            .GroupBy(value => value.Key, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Sum(value => value.Value),
+                StringComparer.Ordinal);
+        return new BppMonteCarloReport(
+            cases.Count, samples, decided, matches,
+            decided == 0 ? 0 : (double)matches / decided,
+            confidentDecided, confidentMatches,
+            confidentDecided == 0 ? 0 : (double)confidentMatches / confidentDecided,
+            brierScore, logLoss,
+            allUnsupported, cases);
+    }
+
+    public static void Write(string path, BppMonteCarloReport report) =>
+        File.WriteAllText(path, JsonSerializer.Serialize(
+            report, new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+
+    public static BppMonteCarloReport Rescore(BppMonteCarloReport input)
+    {
+        BppMonteCarloCase[] cases = input.Cases.Select(value =>
+        {
+            string? confidence = ClassifyConfidence(
+                value.PlayerWins, value.Draws, input.SamplesPerBattle);
+            (double lower, _) = WilsonInterval(
+                value.PlayerWins, input.SamplesPerBattle);
+            (_, double upper) = WilsonInterval(
+                value.PlayerWins + value.Draws, input.SamplesPerBattle);
+            return value with
+            {
+                PlayerWinRate = Rate(value.PlayerWins, input.SamplesPerBattle),
+                PlayerOutcomeProbability = OutcomeProbability(
+                    value.PlayerWins, value.Draws, input.SamplesPerBattle),
+                DecisiveRate = Rate(
+                    value.PlayerWins + value.OpponentWins, input.SamplesPerBattle),
+                ConservativePlayerProbabilityLower95 = lower,
+                ConservativePlayerProbabilityUpper95 = upper,
+                ConfidentPrediction = confidence,
+                ConfidentMatch = confidence is not null && confidence == value.Actual,
+            };
+        }).ToArray();
+        int decided = cases.Count(value => value.Predicted is not null);
+        int matches = cases.Count(value => value.Match);
+        int confidentDecided = cases.Count(value => value.ConfidentPrediction is not null);
+        int confidentMatches = cases.Count(value => value.ConfidentMatch);
+        BppMonteCarloCase[] scored = cases.Where(value =>
+            value.Error is null && value.Actual is "win" or "loss").ToArray();
+        double brier = scored.Length == 0 ? 0 : scored.Average(value =>
+        {
+            double expected = value.Actual == "win" ? 1 : 0;
+            double difference = value.PlayerOutcomeProbability - expected;
+            return difference * difference;
+        });
+        double logLoss = scored.Length == 0 ? 0 : scored.Average(value =>
+        {
+            double probability = Math.Clamp(
+                value.PlayerOutcomeProbability, 0.000001, 0.999999);
+            return value.Actual == "win"
+                ? -Math.Log(probability)
+                : -Math.Log(1 - probability);
+        });
+        return new BppMonteCarloReport(
+            cases.Length,
+            input.SamplesPerBattle,
+            decided,
+            matches,
+            decided == 0 ? 0 : (double)matches / decided,
+            confidentDecided,
+            confidentMatches,
+            confidentDecided == 0 ? 0 : (double)confidentMatches / confidentDecided,
+            brier,
+            logLoss,
+            input.UnsupportedActions,
+            cases);
+    }
+
+    internal static string? ClassifyConfidence(
+        int playerWins,
+        int draws,
+        int samples)
+    {
+        if (samples <= 0)
+        {
+            return null;
+        }
+        // A timeout/draw has an unknown eventual winner. Use the 95% Wilson
+        // interval after resolving every draw against the proposed direction.
+        // A raw proportion crossing 65% is not sufficient evidence by itself.
+        (double lowerPlayerProbability, _) = WilsonInterval(playerWins, samples);
+        (_, double upperPlayerProbability) = WilsonInterval(playerWins + draws, samples);
+        return lowerPlayerProbability >= 0.65
+            ? "win"
+            : upperPlayerProbability <= 0.35 ? "loss" : null;
+    }
+
+    internal static (double Lower, double Upper) WilsonInterval(
+        int successes,
+        int samples)
+    {
+        if (samples <= 0)
+        {
+            return (0, 1);
+        }
+        const double z = 1.959963984540054;
+        double proportion = Math.Clamp((double)successes / samples, 0, 1);
+        double zSquared = z * z;
+        double denominator = 1 + zSquared / samples;
+        double center = (proportion + zSquared / (2 * samples)) / denominator;
+        double margin = z * Math.Sqrt(
+            (proportion * (1 - proportion) + zSquared / (4 * samples)) / samples) /
+            denominator;
+        return (Math.Max(0, center - margin), Math.Min(1, center + margin));
+    }
+
+    internal static double OutcomeProbability(
+        int playerWins,
+        int draws,
+        int samples) => samples <= 0
+            ? 0
+            : (playerWins + 0.5 * draws) / samples;
+
+    private static double Rate(int count, int total) =>
+        total <= 0 ? 0 : (double)count / total;
+}

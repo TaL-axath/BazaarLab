@@ -1,0 +1,66 @@
+{
+  "actions": [
+    "TActionCardBeginSandstorm", "TActionCardCharge", "TActionCardFlyingStart",
+    "TActionCardFlyingStop", "TActionCardFlyingToggle", "TActionCardForceUse",
+    "TActionCardFreeze", "TActionCardHaste", "TActionCardModifyAttribute",
+    "TActionCardReload", "TActionCardSlow", "TActionPlayerBurnApply",
+    "TActionPlayerBurnRemove", "TActionPlayerDamage", "TActionPlayerHeal",
+    "TActionPlayerPoisonApply", "TActionPlayerPoisonRemove", "TActionPlayerRegenApply",
+    "TActionPlayerRageApply", "TActionPlayerRegenRemove", "TActionPlayerShieldApply",
+    "TActionPlayerTempoApply", "TActionPlayerModifyAttribute",
+    "TActionPlayerReviveHeal",
+    "TActionCardEnchant", "TActionCardEnchantRandom", "TActionCardAddTagsRandom",
+    "TActionCardDisable", "TActionCardRepair", "TActionCardDestroy",
+    "TActionCardAddTagsList", "TActionAnd", "TActionCardAddTagsBySource",
+    "TActionCardEnchantRemove", "TActionCardTransform", "TActionCardUpgrade",
+    "TActionCardTransformDestroyed"
+  ],
+  "auras": [
+    "TAuraActionCardAddTagsList", "TAuraActionCardModifyAttribute",
+    "TAuraActionPlayerModifyAttribute", "TAuraActionCardAddTagsBySource"
+  ],
+  "triggers": [
+    "TTriggerOnCardAttributeChanged", "TTriggerOnCardCritted", "TTriggerOnCardFired",
+    "TTriggerOnCardPerformedBurn", "TTriggerOnCardPerformedFreeze",
+    "TTriggerOnCardPerformedHaste", "TTriggerOnCardPerformedHeal",
+    "TTriggerOnCardPerformedPoison", "TTriggerOnCardPerformedShield",
+    "TTriggerOnCardPerformedSlow", "TTriggerOnCardStartedFlying",
+    "TTriggerOnCardStoppedFlying", "TTriggerOnFightStarted", "TTriggerOnItemUsed",
+    "TTriggerOnPlayerAttributeChanged", "TTriggerOnPlayerEnraged",
+    "TTriggerOnPlayerEnrageEnded", "TTriggerOnPlayerRaged",
+    "TTriggerOnPlayerRagedWhileEnraged", "TTriggerOr",
+    "TTriggerOnCardPerformedRegen", "TTriggerOnCardPerformedOverHeal",
+    "TTriggerOnSandstorm", "TTriggerOnBeforeItemUsed",
+    "TTriggerOnCardPerformedDamage", "TTriggerOnCardPerformedReload",
+    "TTriggerOnCardStartsFlying", "TTriggerOnCardDisabled", "TTriggerOnCardRepaired",
+    "TTriggerOnBeforeCardDestroyed", "TTriggerOnCardPerformedDestruction",
+    "TTriggerOnPlayerDied", "TTriggerOnCardTransformed", "TTriggerOnCardUpgraded"
+  ],
+  "targets": [
+    "TTargetCardPositional", "TTargetCardRandom", "TTargetCardSection",
+    "TTargetCardSelf", "TTargetCardTriggerSource", "TTargetCardTriggerTarget",
+    "TTargetCardXMost", "TTargetCardOccupying", "TTargetPlayerAbsolute",
+    "TTargetPlayerRelative", "TTargetPlayer"
+  ],
+  "conditionals": [
+    "TCardConditionalAnd", "TCardConditionalAttribute", "TCardConditionalCanCrit",
+    "TCardConditionalHasEnchantment", "TCardConditionalHiddenTag", "TCardConditionalId",
+    "TCardConditionalOr", "TCardConditionalSize", "TCardConditionalTag",
+    "TCardConditionalTier", "TCardConditionalType", "TCardConditionalTriggerSource",
+    "TCardConditionalEnchantmentEligible", "TCardConditionalAttributeHighest",
+    "TCardConditionalAttributeLowest", "TCardConditionalPlayerHero",
+    "TPlayerConditionalAttribute", "TCardConditionalSizeLargest",
+    "TCardConditionalSizeSmallest"
+  ],
+  "values": [
+    "TFixedValue", "TRangeValue", "TReferenceValueAttributeChange", "TReferenceValueCardAttribute",
+    "TReferenceValueCardAttributeUnscaled", "TReferenceValueCardCount",
+    "TReferenceValuePlayerAttribute", "TReferenceValuePlayerAttributeUnscaled",
+    "TReferenceValueCardTagCount", "TReferenceValueCardAttributeAggregate"
+  ],
+  "prerequisites": [
+    "TPrerequisiteCardAttributeComparator", "TPrerequisiteCardCount", "TPrerequisitePlayer"
+  ],
+  "costs": ["TActionCostPlayerAttribute"],
+  "durations": ["TCombatDuration", "TDeterminantDuration"]
+}
