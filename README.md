@@ -30,7 +30,8 @@ BazaarLab 是一个面向《The Bazaar》的本地阵容实验与战斗分析插
 - 编译后的 DLL、PDB、EXE 或运行时目录。
 
 BazaarLab 通过公开的 BPP 接口读取必要的游戏状态。编译插件前，需要用户自行安装
-BepInEx、BazaarPlusPlus 和游戏本体。
+BazaarPlusPlus 和游戏本体。BPP 的官方安装包已经自带所需的 BepInEx，无需另外下载
+或单独安装 BepInEx。
 
 ## 本地构建
 
@@ -44,7 +45,9 @@ BepInEx、BazaarPlusPlus 和游戏本体。
 
 ## Windows 分享安装包
 
-在已安装游戏、BepInEx、BPP 和 .NET 8 Runtime 的开发机上运行：
+**[直接下载 BazaarLab v1.0.0 Windows x64 安装包](https://github.com/TaL-axath/BazaarLab/releases/download/v1.0.0/BazaarLab-v1.0.0-Windows-x64.zip)**
+
+在已安装游戏、BPP（已自带 BepInEx）和 .NET 8 Runtime 的开发机上运行：
 
 ```powershell
 ./installer/build-package.ps1
@@ -56,13 +59,13 @@ BepInEx、BazaarPlusPlus 和游戏本体。
 
 安装器能够从 Steam 库自动发现《The Bazaar》，也支持手动选择游戏根目录。安装前会检查：
 
-- BepInEx 5.4 或更高版本；
-- BazaarPlusPlus 5.x（建议 5.2.1 或更高版本）；
+- BazaarPlusPlus 5.x（建议 5.2.1 或更高版本，其安装包已自带 BepInEx 5.4）；
 - Microsoft .NET 8 Desktop/NETCore Runtime；
 - 安装包载荷完整性和游戏是否正在运行。
 
-缺少 .NET 8 时，安装器可调用 Windows Package Manager 安装；缺少 BPP 时会打开其
-官方项目页。实际写入采用暂存目录、SHA-256 复验和旧版本备份，失败时会尝试恢复原版本。
+缺少 .NET 8 时，安装器可调用 Windows Package Manager 安装；缺少 BPP 或 BepInEx
+时会统一引导安装 BPP，避免让用户误以为需要分别安装两者。实际写入采用暂存目录、
+SHA-256 复验和旧版本备份，失败时会尝试恢复原版本。
 
 也可以用于自动化部署：
 

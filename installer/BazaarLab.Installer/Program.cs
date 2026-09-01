@@ -88,7 +88,7 @@ namespace BazaarLab.Installer
             };
             var subtitle = new Label
             {
-                Text = "自动查找 Steam 游戏目录、检查依赖并安装 BazaarLab。",
+                Text = "自动查找 Steam 游戏目录、检查 BPP 环境并安装 BazaarLab。BPP 安装包已自带 BepInEx。",
                 AutoSize = true,
                 Location = new Point(21, 52),
             };
@@ -139,9 +139,9 @@ namespace BazaarLab.Installer
             _dotnet.Location = new Point(22, 355);
             _dotnet.Size = new Size(120, 32);
             _dotnet.Click += InstallDotNetClick;
-            _bpp.Text = "打开 BPP 官网";
+            _bpp.Text = "获取 BPP（含 BepInEx）";
             _bpp.Location = new Point(150, 355);
-            _bpp.Size = new Size(130, 32);
+            _bpp.Size = new Size(180, 32);
             _bpp.Click += delegate { OpenUrl(BppUrl); };
             _install.Text = "安装 / 更新 BazaarLab";
             _install.Location = new Point(590, 350);
@@ -224,7 +224,7 @@ namespace BazaarLab.Installer
             _summary.ForeColor = _checksPassed ? Color.DarkGreen : Color.DarkRed;
             _summary.Text = _checksPassed
                 ? "检查通过，可以安装。现有 BazaarLab 会先备份，再原子替换。"
-                : "检查未通过。请修复标红项目后点击“重新扫描”。";
+                : "检查未通过。若缺少 BPP 或 BepInEx，只需安装最新版 BPP（已自带 BepInEx）。";
         }
 
         private void AddCheck(string component, bool ok, bool warning, string detail)
@@ -352,7 +352,7 @@ namespace BazaarLab.Installer
             report.BepInExOk = bepinexVersion != null && bepinexVersion.Major == 5 &&
                 bepinexVersion >= new Version(5, 4, 0, 0);
             report.BepInExDetail = bepinexVersion == null
-                ? "未找到 BepInEx 5.4"
+                ? "未找到 BepInEx 5.4；请安装最新版 BPP，其安装包已自带 BepInEx"
                 : "版本 " + bepinexVersion;
 
             string bpp = Path.Combine(root ?? string.Empty, "BepInEx", "plugins", "BazaarPlusPlus.dll");
@@ -360,7 +360,7 @@ namespace BazaarLab.Installer
             report.BppOk = bppVersion != null && bppVersion.Major == 5;
             report.BppWarning = report.BppOk && bppVersion < new Version(5, 2, 1, 0);
             report.BppDetail = bppVersion == null
-                ? "未找到 BazaarPlusPlus.dll（请先使用 BPP 官方安装器）"
+                ? "未找到 BazaarPlusPlus.dll；请使用 BPP 官方安装器（同时安装 BepInEx）"
                 : "版本 " + bppVersion + (report.BppWarning ? "；推荐 5.2.1 或更高版本" : string.Empty);
 
             string runtimeDetail;

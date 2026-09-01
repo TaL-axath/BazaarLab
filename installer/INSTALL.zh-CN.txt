@@ -4,19 +4,20 @@ BazaarLab 1.0.0 安装说明
 1. 完整解压 ZIP 文件，不能只从压缩包预览窗口运行安装器。
 2. 双击 BazaarLab-Installer.exe。
 3. 安装器会自动搜索 Steam 中的 The Bazaar，也可以手动选择包含 TheBazaar.exe 的目录。
-4. 确认 BepInEx、BazaarPlusPlus 和 .NET 8 检查通过后，点击“安装 / 更新 BazaarLab”。
+4. 确认 BPP 环境和 .NET 8 检查通过后，点击“安装 / 更新 BazaarLab”。
 5. 完全重启游戏。
 
 依赖要求
 --------
 
 - Windows x64
-- BepInEx 5.4
-- BazaarPlusPlus 5.x（推荐 5.2.1 或更高版本）
+- BazaarPlusPlus 5.x（推荐 5.2.1 或更高版本；其安装包已自带 BepInEx 5.4）
 - Microsoft .NET 8 Runtime x64
 
-安装器不会捆绑或覆盖 BepInEx/BazaarPlusPlus。缺少 .NET 8 时，可以使用安装器中的
-“安装 .NET 8”按钮；缺少 BPP 时，请先通过 BPP 官方项目安装。
+安装器不会捆绑或覆盖 BepInEx/BazaarPlusPlus。不要单独寻找或安装 BepInEx：最新版
+BPP 安装包已经包含所需的 BepInEx。缺少 BPP 或 BepInEx 时，点击“获取 BPP（含
+BepInEx）”并使用 BPP 官方安装器即可。缺少 .NET 8 时，可以使用安装器中的
+“安装 .NET 8”按钮。
 
 安装行为
 --------
