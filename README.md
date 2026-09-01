@@ -45,7 +45,7 @@ BazaarPlusPlus 和游戏本体。BPP 的官方安装包已经自带所需的 Bep
 
 ## Windows 分享安装包
 
-**[直接下载 BazaarLab v1.0.3 Windows x64 安装包](https://github.com/TaL-axath/BazaarLab/releases/download/v1.0.3/BazaarLab-v1.0.3-Windows-x64.zip)**
+**[直接下载 BazaarLab v1.0.4 Windows x64 安装包](https://github.com/TaL-axath/BazaarLab/releases/download/v1.0.4/BazaarLab-v1.0.4-Windows-x64.zip)**
 
 在已安装游戏、BPP（已自带 BepInEx）和 .NET 8 Runtime 的开发机上运行：
 
