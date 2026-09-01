@@ -52,7 +52,7 @@ namespace BazaarLab.Installer
 
     internal sealed class InstallerForm : Form
     {
-        private const string InstallerVersion = "1.0.1";
+        private const string InstallerVersion = "1.0.2";
         private const string BppUrl = "https://github.com/BazaarPlusPlus/BazaarPlusPlus";
         private const string DotNetUrl = "https://dotnet.microsoft.com/download/dotnet/8.0";
 
@@ -532,7 +532,7 @@ namespace BazaarLab.Installer
                 Directory.Move(staging, destination);
                 string receipt = Path.Combine(destination, "install-receipt.txt");
                 File.WriteAllText(receipt,
-                    "BazaarLab 1.0.1" + Environment.NewLine +
+                    "BazaarLab 1.0.2" + Environment.NewLine +
                     "InstalledAt=" + DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture) +
                     Environment.NewLine + "GameRoot=" + gameRoot + Environment.NewLine,
                     new UTF8Encoding(false));
@@ -548,7 +548,7 @@ namespace BazaarLab.Installer
                 catch { }
                 throw;
             }
-            return "BazaarLab 1.0.1 已安装到：" + destination;
+            return "BazaarLab 1.0.2 已安装到：" + destination;
         }
 
         private static void MoveLegacyPluginBackups(string pluginsRoot, string backupRoot,

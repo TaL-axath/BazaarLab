@@ -1,5 +1,7 @@
 ﻿using System.Diagnostics;
 
+using System.Collections.Concurrent;
+
 namespace BazaarLab.Combat;
 
 public sealed record PlacementPin(string InstanceId, int BoardPosition);
@@ -15,19 +17,26 @@ public sealed class PlacementSearchOptions
     public int BaseSeed { get; init; } = 777;
     public int MaximumTicks { get; init; } = 2400;
     public int ScoreMaximumMilliseconds { get; init; } = 10_000;
+    public int DiscoveryTimeBudgetMilliseconds { get; init; } = 3_000;
+    public int Parallelism { get; init; } = Math.Max(1, Math.Min(8, Environment.ProcessorCount));
     public double DefenseWeightPercent { get; init; }
     public int ScreeningSamples { get; init; } = 1;
     public int DiscoverySamples { get; init; } = 3;
-    public int ValidationSamples { get; init; } = 11;
+    public int ValidationSamples { get; init; } = 50;
     public int ValidationCandidateCount { get; init; } = 2;
-    public int RacingCandidateCount { get; init; } = 8;
-    public int BeamWidth { get; init; } = 4;
-    public int BeamRounds { get; init; } = 3;
+    public int RacingCandidateCount { get; init; } = 64;
+    public int BeamWidth { get; init; } = 16;
+    public int BeamRounds { get; init; } = 4;
     public int MaxInventorySets { get; init; } = 32;
     public int MaxInventoryCombinationsScanned { get; init; } = 100_000;
-    public int MaxEvaluatedArrangements { get; init; } = 32;
-    public int ExactArrangementLimit { get; init; } = 32;
+    public int MaxEvaluatedArrangements { get; init; } = 10_000;
+    public int ExactArrangementLimit { get; init; } = 50_000;
 }
+
+public sealed record PlacementSearchProgress(
+    string Stage,
+    double Fraction,
+    string Message);
 
 public sealed record PlacementBoardItem(
     string InstanceId,
@@ -121,7 +130,8 @@ public static class PlacementOptimizer
         public required CombatantState BaselinePlayer { get; init; }
         public required PlacementSearchOptions Options { get; init; }
         public required IReadOnlyDictionary<string, Item> Items { get; init; }
-        public Dictionary<string, ScoreAccumulator> Scores { get; } = new(StringComparer.Ordinal);
+        public ConcurrentDictionary<string, ScoreAccumulator> Scores { get; } =
+            new(StringComparer.Ordinal);
         public int SimulationCount;
         public int CacheHits;
         public int CacheMisses;
@@ -131,19 +141,22 @@ public static class PlacementOptimizer
         string snapshotPath,
         OfficialCardCatalog catalog,
         PlacementSearchOptions? options = null,
-        CancellationToken cancellationToken = default) => OptimizeJson(
-            File.ReadAllText(snapshotPath), catalog, options, cancellationToken);
+        CancellationToken cancellationToken = default,
+        Action<PlacementSearchProgress>? progress = null) => OptimizeJson(
+            File.ReadAllText(snapshotPath), catalog, options, cancellationToken, progress);
 
     public static PlacementSearchResult OptimizeJson(
         string snapshotJson,
         OfficialCardCatalog catalog,
         PlacementSearchOptions? options = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action<PlacementSearchProgress>? progress = null)
     {
         options ??= new PlacementSearchOptions();
         ValidateOptions(options);
         Stopwatch totalWatch = Stopwatch.StartNew();
         Stopwatch phaseWatch = Stopwatch.StartNew();
+        ReportProgress(progress, "preparing", 0.01, "正在读取阵容与卡牌目录");
         BppSnapshotValidationReport snapshotValidation =
             BppSnapshotValidator.ValidatePlacementJson(snapshotJson, catalog);
         if (!snapshotValidation.PredictionReady)
@@ -220,6 +233,8 @@ public static class PlacementOptimizer
         (List<InventorySet> inventories, long inventoryCount, bool inventoryTruncated) =
             GenerateInventorySets(fixedItems, optionalItems, boardCards, originalSpan,
                 capacity, options, cancellationToken);
+        ReportProgress(progress, "preparing", 0.04,
+            $"已保留 {inventories.Count} 组上阵物品候选");
 
         var candidateMap = new Dictionary<string, Candidate>(StringComparer.Ordinal);
         bool exact = !inventoryTruncated;
@@ -260,20 +275,37 @@ public static class PlacementOptimizer
             }
             while (added);
         }
+        bool candidateDomainEnumeratedExactly = exact;
         Candidate incumbent = CurrentBoardCandidate(boardCards, items, pins, options);
         candidateMap[incumbent.Key] = incumbent;
         double preparationMilliseconds = phaseWatch.Elapsed.TotalMilliseconds;
 
         phaseWatch.Restart();
         var evaluated = new Dictionary<string, Candidate>(StringComparer.Ordinal);
-        foreach (Candidate candidate in candidateMap.Values
-            .Take(options.MaxEvaluatedArrangements))
+        List<Candidate> discoveryOrder = ShuffleWithoutReplacement(
+            candidateMap.Values.Where(value => value.Key != incumbent.Key), options.BaseSeed)
+            .Take(Math.Max(0, options.MaxEvaluatedArrangements - 1)).ToList();
+        discoveryOrder.Insert(0, incumbent);
+        int discoveryTarget = discoveryOrder.Count;
+        int batchSize = Math.Max(1, options.Parallelism * 2);
+        for (int offset = 0; offset < discoveryOrder.Count; offset += batchSize)
         {
-            _ = Evaluate(context, candidate, options.ScreeningSamples, cancellationToken);
-            evaluated[candidate.Key] = candidate;
+            cancellationToken.ThrowIfCancellationRequested();
+            if (offset > 0 && totalWatch.ElapsedMilliseconds >=
+                    options.DiscoveryTimeBudgetMilliseconds)
+            {
+                break;
+            }
+            List<Candidate> batch = discoveryOrder.Skip(offset).Take(batchSize).ToList();
+            EvaluateBatch(context, batch, options.ScreeningSamples, cancellationToken);
+            foreach (Candidate candidate in batch) evaluated[candidate.Key] = candidate;
+            double fraction = discoveryTarget == 0 ? 1d :
+                Math.Min(1d, evaluated.Count / (double)discoveryTarget);
+            ReportProgress(progress, "discovery", 0.05 + fraction * 0.60,
+                $"发现阶段 {evaluated.Count}/{discoveryTarget} 个排列");
         }
         int rounds = 0;
-        if (!exact)
+        if (!exact && totalWatch.ElapsedMilliseconds < options.DiscoveryTimeBudgetMilliseconds)
         {
             for (int round = 0;
                  round < options.BeamRounds && evaluated.Count < options.MaxEvaluatedArrangements;
@@ -282,26 +314,42 @@ public static class PlacementOptimizer
                 List<Candidate> beam = Rank(context, evaluated.Values)
                     .Take(options.BeamWidth).ToList();
                 int before = evaluated.Count;
+                var newCandidates = new Dictionary<string, Candidate>(StringComparer.Ordinal);
                 foreach (Candidate parent in beam)
                 {
                     foreach (Candidate neighbor in Neighbors(parent, pins, options))
                     {
-                        if (evaluated.ContainsKey(neighbor.Key))
+                        if (evaluated.ContainsKey(neighbor.Key) ||
+                            !newCandidates.TryAdd(neighbor.Key, neighbor))
                         {
                             continue;
                         }
-                        _ = Evaluate(context, neighbor, options.ScreeningSamples,
-                            cancellationToken);
-                        evaluated[neighbor.Key] = neighbor;
-                        if (evaluated.Count >= options.MaxEvaluatedArrangements)
+                        if (evaluated.Count + newCandidates.Count >=
+                            options.MaxEvaluatedArrangements)
                         {
                             break;
                         }
                     }
-                    if (evaluated.Count >= options.MaxEvaluatedArrangements)
+                    if (evaluated.Count + newCandidates.Count >=
+                        options.MaxEvaluatedArrangements)
                     {
                         break;
                     }
+                }
+                List<Candidate> orderedNeighbors = ShuffleWithoutReplacement(
+                    newCandidates.Values, options.BaseSeed + round + 1).ToList();
+                for (int offset = 0; offset < orderedNeighbors.Count; offset += batchSize)
+                {
+                    if (totalWatch.ElapsedMilliseconds >=
+                            options.DiscoveryTimeBudgetMilliseconds) break;
+                    List<Candidate> batch = orderedNeighbors.Skip(offset)
+                        .Take(batchSize).ToList();
+                    EvaluateBatch(context, batch, options.ScreeningSamples,
+                        cancellationToken);
+                    foreach (Candidate candidate in batch)
+                        evaluated[candidate.Key] = candidate;
+                    ReportProgress(progress, "discovery", 0.65,
+                        $"局部扩展第 {round + 1} 轮，已评估 {evaluated.Count} 个排列");
                 }
                 rounds++;
                 if (evaluated.Count == before)
@@ -311,31 +359,41 @@ public static class PlacementOptimizer
             }
         }
 
+        exact = exact && evaluated.Count == candidateMap.Count;
+
         List<Candidate> racing = IncludeIncumbent(
             Rank(context, evaluated.Values), incumbent, options.RacingCandidateCount);
-        foreach (Candidate candidate in racing)
-        {
-            _ = Evaluate(context, candidate, options.DiscoverySamples, cancellationToken);
-        }
+        ReportProgress(progress, "racing", 0.68,
+            $"竞速复筛 {racing.Count} 个候选");
+        EvaluateBatch(context, racing, options.DiscoverySamples, cancellationToken);
         racing = Rank(context, racing);
+
+        int semifinalSampleCount = Math.Min(options.ValidationSamples,
+            Math.Max(options.DiscoverySamples, 11));
+        List<Candidate> semifinal = IncludeIncumbent(racing, incumbent,
+            Math.Min(16, racing.Count));
+        ReportProgress(progress, "racing", 0.80,
+            $"半决筛选 {semifinal.Count} 个候选，共同样本 {semifinalSampleCount}");
+        EvaluateBatch(context, semifinal, semifinalSampleCount, cancellationToken);
+        semifinal = Rank(context, semifinal);
         double candidateMilliseconds = phaseWatch.Elapsed.TotalMilliseconds;
 
         phaseWatch.Restart();
-        List<Candidate> validation = IncludeIncumbent(
-            racing, incumbent, options.ValidationCandidateCount);
-        Dictionary<string, PlacementCandidateScore> discoveryScores = racing.ToDictionary(
+        List<Candidate> validation = TakeLeadersAndIncumbent(
+            semifinal, incumbent, options.ValidationCandidateCount);
+        Dictionary<string, PlacementCandidateScore> discoveryScores = validation.ToDictionary(
             value => value.Key,
             value => SnapshotScore(context.Scores[value.Key]),
             StringComparer.Ordinal);
         int simulationsBeforeValidation = context.SimulationCount;
-        foreach (Candidate candidate in validation)
-        {
-            _ = Evaluate(context, candidate, options.ValidationSamples, cancellationToken);
-        }
+        ReportProgress(progress, "validation", 0.90,
+            $"最终验证 {validation.Count} 个候选，共同样本 {options.ValidationSamples}");
+        EvaluateBatch(context, validation, options.ValidationSamples, cancellationToken);
         Candidate winner = Rank(context, validation).First();
         PlacementCandidateScore discoveryScore = discoveryScores[winner.Key];
         PlacementCandidateScore validationScore = SnapshotScore(context.Scores[winner.Key]);
         double validationMilliseconds = phaseWatch.Elapsed.TotalMilliseconds;
+        ReportProgress(progress, "finalizing", 0.99, "正在生成推荐与移动目标");
 
         HashSet<string> originalIds = new(
             boardCards.Select(value => value.InstanceId), StringComparer.Ordinal);
@@ -350,7 +408,9 @@ public static class PlacementOptimizer
             resultBoard, replaced, selected, replaced.Length > 0 || selected.Length > 0,
             discoveryScore, validationScore);
         var diagnostics = new PlacementSearchDiagnostics(
-            exact ? "exact" : stashCandidates.Count > 0 ? "inventory-beam-local" : "beam-local",
+            exact ? "exact" : candidateDomainEnumeratedExactly
+                ? "random-without-replacement-budgeted"
+                : stashCandidates.Count > 0 ? "inventory-beam-local" : "beam-local",
             exact,
             inventoryCount,
             inventoryTruncated,
@@ -372,6 +432,8 @@ public static class PlacementOptimizer
             candidateMilliseconds,
             validationMilliseconds,
             totalWatch.Elapsed.TotalMilliseconds);
+        ReportProgress(progress, "complete", 1.0,
+            $"完成：评估 {evaluated.Count} 个排列，终验 {validationScore.Samples} 个样本");
         return new PlacementSearchResult(recommendation, diagnostics);
     }
 
@@ -380,7 +442,9 @@ public static class PlacementOptimizer
         if (value.BoardMaximumPosition < value.BoardMinimumPosition ||
             value.ScreeningSamples <= 0 || value.DiscoverySamples < value.ScreeningSamples ||
             value.ValidationSamples < value.DiscoverySamples || value.MaximumTicks <= 0 ||
-            value.ScoreMaximumMilliseconds <= 0 || value.DefenseWeightPercent < 0 ||
+            value.ScoreMaximumMilliseconds <= 0 ||
+            value.DiscoveryTimeBudgetMilliseconds <= 0 || value.Parallelism <= 0 ||
+            value.DefenseWeightPercent < 0 ||
             value.MaxInventorySets <= 0 || value.MaxInventoryCombinationsScanned <= 0 ||
             value.MaxEvaluatedArrangements <= 0 || value.ExactArrangementLimit <= 0 ||
             value.BeamWidth <= 0 || value.RacingCandidateCount < 2 ||
@@ -784,6 +848,53 @@ public static class PlacementOptimizer
         return result;
     }
 
+    private static List<Candidate> TakeLeadersAndIncumbent(
+        IReadOnlyList<Candidate> ranked,
+        Candidate incumbent,
+        int leaderCount)
+    {
+        List<Candidate> result = ranked.Take(Math.Max(1, leaderCount)).ToList();
+        if (!result.Any(value => value.Key == incumbent.Key)) result.Add(incumbent);
+        return result;
+    }
+
+    private static List<Candidate> ShuffleWithoutReplacement(
+        IEnumerable<Candidate> candidates,
+        int seed)
+    {
+        List<Candidate> result = candidates.OrderBy(value => value.Key,
+            StringComparer.Ordinal).ToList();
+        var random = new Random(seed);
+        for (int index = result.Count - 1; index > 0; index--)
+        {
+            int other = random.Next(index + 1);
+            (result[index], result[other]) = (result[other], result[index]);
+        }
+        return result;
+    }
+
+    private static void EvaluateBatch(
+        SearchContext context,
+        IReadOnlyList<Candidate> candidates,
+        int requestedSamples,
+        CancellationToken cancellationToken)
+    {
+        if (candidates.Count == 0) return;
+        Parallel.ForEach(candidates, new ParallelOptions
+        {
+            CancellationToken = cancellationToken,
+            MaxDegreeOfParallelism = context.Options.Parallelism,
+        }, candidate => _ = Evaluate(context, candidate, requestedSamples,
+            cancellationToken));
+    }
+
+    private static void ReportProgress(
+        Action<PlacementSearchProgress>? progress,
+        string stage,
+        double fraction,
+        string message) => progress?.Invoke(new PlacementSearchProgress(stage,
+            Math.Clamp(fraction, 0d, 1d), message));
+
     private static PlacementCandidateScore Evaluate(
         SearchContext context,
         Candidate candidate,
@@ -792,14 +903,24 @@ public static class PlacementOptimizer
     {
         if (!context.Scores.TryGetValue(candidate.Key, out ScoreAccumulator? score))
         {
-            score = new ScoreAccumulator();
-            score.DefenseWeightPercent = context.Options.DefenseWeightPercent;
-            context.Scores[candidate.Key] = score;
-            context.CacheMisses++;
+            var created = new ScoreAccumulator
+            {
+                DefenseWeightPercent = context.Options.DefenseWeightPercent,
+            };
+            if (context.Scores.TryAdd(candidate.Key, created))
+            {
+                score = created;
+                Interlocked.Increment(ref context.CacheMisses);
+            }
+            else
+            {
+                score = context.Scores[candidate.Key];
+                Interlocked.Increment(ref context.CacheHits);
+            }
         }
         else
         {
-            context.CacheHits++;
+            Interlocked.Increment(ref context.CacheHits);
         }
         while (score.Samples < requestedSamples)
         {
@@ -814,7 +935,7 @@ public static class PlacementOptimizer
             CombatSimulationResult simulation = CombatSimulation.RunIndexed(
                 state, unchecked((uint)context.Options.BaseSeed), runIndex,
                 evaluationTicks);
-            context.SimulationCount++;
+            Interlocked.Increment(ref context.SimulationCount);
             if (string.Equals(simulation.WinnerId, context.BaselinePlayer.Id,
                 StringComparison.OrdinalIgnoreCase))
             {

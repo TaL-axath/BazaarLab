@@ -25,6 +25,9 @@ public sealed partial class Plugin
     private string _placementStatus = "就绪";
     private string _placementProcessLog = string.Empty;
     private float _placementStartedAt;
+    private readonly object _placementProgressLock = new();
+    private float _placementProgress;
+    private string _placementProgressLabel = "等待启动";
     private List<InventoryState>? _moveExpectedStates;
     private List<MoveStep>? _movePlan;
     private List<InventoryState>? _undoExpectedStates;
@@ -74,9 +77,9 @@ public sealed partial class Plugin
     private void UpdatePlacementControls()
     {
         if (_placementProcess is not null &&
-            Time.realtimeSinceStartup - _placementStartedAt >= 10f)
+            Time.realtimeSinceStartup - _placementStartedAt >= 15f)
         {
-            CancelPlacementSearch("摆位规划超过 10 秒，已自动中断；请减少候选物品后重试");
+            CancelPlacementSearch("摆位规划超过 15 秒，已自动中断；请减少候选物品后重试");
         }
         else if (_placementProcess is not null && IsCombatOrReplayActive())
         {
@@ -103,6 +106,11 @@ public sealed partial class Plugin
         _placementProcessLogBuilder = null;
         _placementResultPath = null;
         _placementResult = null;
+        lock (_placementProgressLock)
+        {
+            _placementProgress = 0f;
+            _placementProgressLabel = "已中断";
+        }
         SetPlacementStatus(status);
     }
 
@@ -115,7 +123,7 @@ public sealed partial class Plugin
         }
 
         float height = _placementWindowMinimized ? 30f :
-            (_placementResult is null ? 152f : 252f);
+            (IsSearching ? 182f : _placementResult is null ? 152f : 252f);
         if (!_placementWindowInitialized)
         {
             _placementWindowRect = new Rect(Screen.width - PlacementWindowWidth - 18f, 70f,
@@ -143,7 +151,7 @@ public sealed partial class Plugin
         GUI.DragWindow(new Rect(0f, 0f, PlacementWindowWidth - 32f, 25f));
         if (_placementWindowMinimized) return;
 
-        float height = _placementResult is null ? 152f : 252f;
+        float height = IsSearching ? 182f : _placementResult is null ? 152f : 252f;
         GUILayout.BeginArea(new Rect(10f, 25f, PlacementWindowWidth - 20f, height - 34f));
         GUILayout.BeginHorizontal();
         GUI.enabled = !IsSearching && !IsMoving;
@@ -164,6 +172,7 @@ public sealed partial class Plugin
         GUI.enabled = true;
         GUILayout.EndHorizontal();
 
+        if (IsSearching) DrawPlacementProgressBar();
         GUILayout.Label(_placementStatus);
         if (_placementResult?.Recommendation?.Board is { Count: > 0 } board)
         {
@@ -180,6 +189,29 @@ public sealed partial class Plugin
             GUILayout.EndScrollView();
         }
         GUILayout.EndArea();
+    }
+
+    private void DrawPlacementProgressBar()
+    {
+        float progress;
+        string label;
+        lock (_placementProgressLock)
+        {
+            progress = Mathf.Clamp01(_placementProgress);
+            label = _placementProgressLabel;
+        }
+        Rect rect = GUILayoutUtility.GetRect(10f, 22f, GUILayout.ExpandWidth(true));
+        GUI.Box(rect, string.Empty);
+        if (progress > 0f)
+        {
+            Color previous = GUI.color;
+            GUI.color = new Color(0.25f, 0.75f, 0.35f, 0.9f);
+            GUI.Box(new Rect(rect.x + 2f, rect.y + 2f,
+                Math.Max(0f, (rect.width - 4f) * progress), rect.height - 4f), string.Empty);
+            GUI.color = previous;
+        }
+        GUI.Label(new Rect(rect.x + 6f, rect.y, rect.width - 12f, rect.height),
+            $"{label}  {progress * 100f:0}%");
     }
 
     private void StartPlacementSearch()
@@ -233,6 +265,11 @@ public sealed partial class Plugin
             _placementInputFingerprint = current.Fingerprint();
             _placementResult = null;
             _placementProcessLog = string.Empty;
+            lock (_placementProgressLock)
+            {
+                _placementProgress = 0.01f;
+                _placementProgressLabel = "准备数据";
+            }
             var output = new StringBuilder();
             string dotnetExecutable = Path.Combine(Environment.GetFolderPath(
                 Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
@@ -253,7 +290,8 @@ public sealed partial class Plugin
             {
                 if (args.Data is not null)
                 {
-                    lock (output) output.AppendLine(args.Data);
+                    if (!TryHandlePlacementProgress(args.Data))
+                        lock (output) output.AppendLine(args.Data);
                 }
             };
             process.ErrorDataReceived += (_, args) =>
@@ -322,6 +360,11 @@ public sealed partial class Plugin
                     PropertyNameCaseInsensitive = true,
                 });
             int count = _placementResult?.Recommendation?.Board?.Count ?? 0;
+            lock (_placementProgressLock)
+            {
+                _placementProgress = 1f;
+                _placementProgressLabel = "完成";
+            }
             SetPlacementStatus(count == 0 ? "没有有效推荐方案" :
                 $"推荐已就绪：{count} 件上阵物品；确认后点击“应用”");
         }
@@ -332,6 +375,22 @@ public sealed partial class Plugin
             _placementProcessLogBuilder = null;
             SetPlacementStatus("无法读取摆位结果：" + exception.Message);
         }
+    }
+
+    private bool TryHandlePlacementProgress(string line)
+    {
+        if (!line.StartsWith("BLPROGRESS\t", StringComparison.Ordinal)) return false;
+        string[] parts = line.Split(new[] { '\t' }, 4);
+        if (parts.Length < 4 || !double.TryParse(parts[2],
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double fraction))
+            return true;
+        lock (_placementProgressLock)
+        {
+            _placementProgress = Mathf.Clamp01((float)fraction);
+            _placementProgressLabel = parts[3];
+        }
+        return true;
     }
 
     private void StartMovePlan()

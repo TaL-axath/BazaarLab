@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using System.Globalization;
 using BazaarLab.Combat;
 
 if (args.Length is not (3 or 4))
@@ -18,7 +19,15 @@ PlacementSearchOptions options = args.Length == 4
             PropertyNameCaseInsensitive = true,
         }) ?? throw new InvalidDataException("invalid placement options")
     : new PlacementSearchOptions();
-PlacementSearchResult result = PlacementOptimizer.Optimize(args[1], catalog, options);
+PlacementSearchResult result = PlacementOptimizer.Optimize(args[1], catalog, options,
+    progress: value =>
+    {
+        string message = (value.Message ?? string.Empty).Replace('\t', ' ')
+            .Replace('\r', ' ').Replace('\n', ' ');
+        Console.WriteLine("BLPROGRESS\t" + value.Stage + "\t" +
+            value.Fraction.ToString("0.0000", CultureInfo.InvariantCulture) + "\t" + message);
+        Console.Out.Flush();
+    });
 string json = JsonSerializer.Serialize(result,
     new JsonSerializerOptions { WriteIndented = true });
 string? outputDirectory = Path.GetDirectoryName(Path.GetFullPath(args[2]));

@@ -3,7 +3,8 @@
 插件在游戏右上角提供 `PLAN`、`APPLY` 与 `UNDO` 三个按钮。
 
 - `PLAN`：立即导出当前棋盘、背包和可见对手，启动独立的
-  `BazaarLab.PlacementSearch` 进程，并显示推荐物品、槽位和验证胜率。
+  `BazaarLab.PlacementSearch` 进程，并显示准备、发现、复筛、终验进度，以及推荐物品、
+  槽位和验证结果。搜索超过 15 秒会自动终止并给出提示。
 - `APPLY`：再次核对计算时的完整物品实例、尺寸、区域、位置和 unlocked
   sockets；完全一致时才规划并逐条发送游戏原生 `MoveCardCommand`。
 - `UNDO`：成功应用后，按经过验证的状态链逆序恢复。若玩家在应用后手动改过任意物品，
