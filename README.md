@@ -42,6 +42,36 @@ BepInEx、BazaarPlusPlus 和游戏本体。
 
 构建产物位于各项目的 `bin` 目录，不会纳入 Git。
 
+## Windows 分享安装包
+
+在已安装游戏、BepInEx、BPP 和 .NET 8 Runtime 的开发机上运行：
+
+```powershell
+./installer/build-package.ps1
+```
+
+脚本会重新编译 BazaarLab，并在仓库外的 `.reverse/releases` 目录生成可分享的
+`BazaarLab-v<版本>-Windows-x64.zip`。压缩包包含图形安装器、编译后的 BazaarLab
+文件、运行时组件、文件哈希清单和中文说明，但不包含 BPP、BepInEx 或游戏文件。
+
+安装器能够从 Steam 库自动发现《The Bazaar》，也支持手动选择游戏根目录。安装前会检查：
+
+- BepInEx 5.4 或更高版本；
+- BazaarPlusPlus 5.x（建议 5.2.1 或更高版本）；
+- Microsoft .NET 8 Desktop/NETCore Runtime；
+- 安装包载荷完整性和游戏是否正在运行。
+
+缺少 .NET 8 时，安装器可调用 Windows Package Manager 安装；缺少 BPP 时会打开其
+官方项目页。实际写入采用暂存目录、SHA-256 复验和旧版本备份，失败时会尝试恢复原版本。
+
+也可以用于自动化部署：
+
+```powershell
+./BazaarLab-Installer.exe --silent --game-dir "D:\\SteamLibrary\\steamapps\\common\\The Bazaar"
+```
+
+退出码 `0` 表示成功，`1` 表示安装错误，`2` 表示依赖或目标目录检查未通过。
+
 ## 数据兼容性
 
 BazaarLab 使用 `bazaarlab-combat-snapshot-v1` 快照格式，并继续只读兼容早期的

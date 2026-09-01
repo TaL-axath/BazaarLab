@@ -3,6 +3,7 @@
 .vs/
 .idea/
 artifacts/
+installer/bin/
 runtime/
 data/
 *.user
