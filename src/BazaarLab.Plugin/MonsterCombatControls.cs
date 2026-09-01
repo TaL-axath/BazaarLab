@@ -174,12 +174,10 @@ public sealed partial class Plugin
             }
             else
             {
-                string decision = _monsterResult.ConfidentPrediction ??
-                    (_monsterResult.Predicted ?? "uncertain");
-                text = $"{decision.ToUpperInvariant()}  " +
-                    $"{_monsterResult.ConservativePlayerProbabilityLower95:P0}–" +
-                    $"{_monsterResult.ConservativePlayerProbabilityUpper95:P0}" +
-                    (stale ? "  updating..." : string.Empty);
+                text = $"胜率 {_monsterResult.PlayerWinRate:P0}\n" +
+                    $"{_monsterResult.PlayerWins}胜 {_monsterResult.OpponentWins}负 " +
+                    $"{_monsterResult.Draws}平 · {_monsterResult.Samples}场" +
+                    (stale ? " · 更新中" : string.Empty);
             }
         }
         GUI.Label(new Rect(rect.x + 8f, rect.y + 9f, rect.width - 16f, 42f), text);
@@ -232,8 +230,8 @@ public sealed partial class Plugin
             var start = new ProcessStartInfo
             {
                 FileName = dotnetExecutable,
-                Arguments = Quote(core) + " predict-bpp-adaptive " + Quote(catalog) + " " +
-                    Quote(input) + " 20260831 21 101 20 2400 " + Quote(_monsterResultPath),
+                Arguments = Quote(core) + " predict-bpp " + Quote(catalog) + " " +
+                    Quote(input) + " 20260831 50 2400 " + Quote(_monsterResultPath),
                 WorkingDirectory = Path.GetDirectoryName(core) ?? Paths.GameRootPath,
                 UseShellExecute = false,
                 CreateNoWindow = true,
@@ -309,12 +307,11 @@ public sealed partial class Plugin
                 SetMonsterStatus("Combat result was empty");
                 return;
             }
-            string confidence = _monsterResult.ConfidentPrediction is null
-                ? "low confidence" : "confident " + _monsterResult.ConfidentPrediction;
             bool stale = !string.Equals(_monsterInputPayload, _lastLiveInventoryPayload,
                 StringComparison.Ordinal);
             _monsterCompletedPayload = _monsterInputPayload;
-            SetMonsterStatus($"Completed: {_monsterResult.Samples} samples, {confidence}" +
+            SetMonsterStatus($"完成：{_monsterResult.Samples} 场，" +
+                $"胜率 {_monsterResult.PlayerWinRate:P0}" +
                 (stale ? "; state changed" : string.Empty));
         }
         catch (Exception exception)
@@ -339,6 +336,7 @@ public sealed partial class Plugin
         public int PlayerWins { get; set; }
         public int OpponentWins { get; set; }
         public int Draws { get; set; }
+        public double PlayerWinRate { get; set; }
         public double PlayerOutcomeProbability { get; set; }
         public double ConservativePlayerProbabilityLower95 { get; set; }
         public double ConservativePlayerProbabilityUpper95 { get; set; }

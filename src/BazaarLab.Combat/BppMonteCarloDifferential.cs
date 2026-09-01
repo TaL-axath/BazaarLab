@@ -56,6 +56,11 @@ public sealed record BppPredictionResult(
 
 public static class BppMonteCarloDifferential
 {
+    private readonly record struct FixedPredictionSample(
+        string? BattleId,
+        IReadOnlyList<string> SkippedCards,
+        CombatSimulationResult Simulation);
+
     public static BppPredictionResult Predict(
         string snapshotPath,
         OfficialCardCatalog catalog,
@@ -103,6 +108,11 @@ public static class BppMonteCarloDifferential
                 0, 0, 0, 0, 1, null, false, null,
                 new Dictionary<string, int>(StringComparer.Ordinal),
                 false, validation.Errors, validation.Warnings, Array.Empty<string>());
+        }
+        if (!adaptive)
+        {
+            return PredictFixedParallel(snapshotPath, catalog, baseSeed, maximumSamples,
+                maximumTicks, battleId, validation);
         }
         int playerWins = 0;
         int opponentWins = 0;
@@ -163,6 +173,74 @@ public static class BppMonteCarloDifferential
             predicted, unsupported,
             runtimeErrors.Length == 0,
             runtimeErrors, validation.Warnings, skippedCards.ToArray());
+    }
+
+    private static BppPredictionResult PredictFixedParallel(
+        string snapshotPath,
+        OfficialCardCatalog catalog,
+        int baseSeed,
+        int samples,
+        int maximumTicks,
+        string fallbackBattleId,
+        BppSnapshotValidationReport validation)
+    {
+        var results = new FixedPredictionSample[samples];
+        Parallel.For(0, samples, new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Max(1, Math.Min(8, Environment.ProcessorCount)),
+        }, sample =>
+        {
+            BppSnapshotImportResult imported =
+                BppCombatSnapshotAdapter.Import(snapshotPath, catalog);
+            CombatSimulationResult simulation = CombatSimulation.RunIndexed(
+                imported.State, unchecked((uint)baseSeed), sample, maximumTicks);
+            results[sample] = new FixedPredictionSample(
+                imported.BattleId, imported.SkippedCards, simulation);
+        });
+
+        string battleId = results.Select(value => value.BattleId)
+            .FirstOrDefault(value => !string.IsNullOrEmpty(value)) ?? fallbackBattleId;
+        int playerWins = 0;
+        int opponentWins = 0;
+        int draws = 0;
+        var unsupported = new Dictionary<string, int>(StringComparer.Ordinal);
+        var skippedCards = new HashSet<string>(StringComparer.Ordinal);
+        foreach (FixedPredictionSample result in results)
+        {
+            if (result.Simulation.WinnerId == "player") playerWins++;
+            else if (result.Simulation.WinnerId == "opponent") opponentWins++;
+            else draws++;
+            foreach (string skippedCard in result.SkippedCards)
+                skippedCards.Add(skippedCard);
+            foreach ((string action, int count) in result.Simulation.UnsupportedActions)
+                unsupported[action] = unsupported.GetValueOrDefault(action) + count;
+        }
+
+        double playerWinRate = Rate(playerWins, samples);
+        (double lower, _) = WilsonInterval(playerWins, samples);
+        (_, double upper) = WilsonInterval(playerWins + draws, samples);
+        string? predicted = playerWins == opponentWins
+            ? null
+            : playerWins > opponentWins ? "win" : "loss";
+        string[] runtimeErrors = skippedCards
+            .Select(card => "skipped card: " + card)
+            .Concat(unsupported.Keys.Select(action => "unsupported action: " + action))
+            .ToArray();
+        return new BppPredictionResult(
+            battleId, samples, playerWins, opponentWins, draws,
+            playerWinRate,
+            OutcomeProbability(playerWins, draws, samples),
+            Rate(playerWins + opponentWins, samples),
+            lower,
+            upper,
+            ClassifyConfidence(playerWins, draws, samples),
+            false,
+            predicted,
+            unsupported,
+            runtimeErrors.Length == 0,
+            runtimeErrors,
+            validation.Warnings,
+            skippedCards.ToArray());
     }
 
     public static BppMonteCarloReport Run(

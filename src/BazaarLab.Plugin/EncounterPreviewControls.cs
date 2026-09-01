@@ -263,8 +263,8 @@ public sealed partial class Plugin
                 var start = new ProcessStartInfo
                 {
                     FileName = dotnetExecutable,
-                    Arguments = Quote(core) + " predict-bpp-adaptive " + Quote(catalog) + " " +
-                        Quote(input) + " 20260831 31 101 20 2400 " +
+                    Arguments = Quote(core) + " predict-bpp " + Quote(catalog) + " " +
+                        Quote(input) + " 20260831 50 2400 " +
                         Quote(_encounterPreviewResultPath),
                     WorkingDirectory = Path.GetDirectoryName(core) ?? gameRoot,
                     UseShellExecute = false,
@@ -551,12 +551,9 @@ public sealed partial class Plugin
                 }
                 else
                 {
-                    string decision = entry.Result.ConfidentPrediction ??
-                        (entry.Result.Predicted ?? "uncertain");
-                    text = "EST " + decision.ToUpperInvariant() + "  " +
-                        entry.Result.ConservativePlayerProbabilityLower95.ToString("P0") + "–" +
-                        entry.Result.ConservativePlayerProbabilityUpper95.ToString("P0") +
-                        "  n=" + entry.Result.Samples;
+                    text = "胜率 " + entry.Result.PlayerWinRate.ToString("P0") + "\n" +
+                        entry.Result.PlayerWins + "胜 " + entry.Result.OpponentWins + "负 " +
+                        entry.Result.Draws + "平 · " + entry.Result.Samples + "场";
                 }
             }
             GUI.Label(new Rect(rect.x + 7f, rect.y + 8f, rect.width - 14f, 38f), text);
