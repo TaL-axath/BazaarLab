@@ -1,6 +1,6 @@
 ﻿# 野怪选择界面自动预览
 
-版本：BazaarLab.Plugin v1.0.5
+版本：BazaarLab.Plugin v1.0.6
 
 ## 使用方式
 

@@ -220,6 +220,11 @@ public sealed partial class Plugin
         {
             return;
         }
+        if (!CanUseCatalog(out string catalogReason))
+        {
+            SetPlacementStatus(catalogReason);
+            return;
+        }
         if (!TryReadInventory(out InventoryState current, out string error))
         {
             SetPlacementStatus("无法读取物品栏：" + error);

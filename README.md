@@ -45,7 +45,7 @@ BazaarPlusPlus 和游戏本体。BPP 的官方安装包已经自带所需的 Bep
 
 ## Windows 分享安装包
 
-**[直接下载 BazaarLab v1.0.5 Windows x64 安装包](https://github.com/TaL-axath/BazaarLab/releases/download/v1.0.5/BazaarLab-v1.0.5-Windows-x64.zip)**
+**[直接下载 BazaarLab v1.0.6 Windows x64 安装包](https://github.com/TaL-axath/BazaarLab/releases/download/v1.0.6/BazaarLab-v1.0.6-Windows-x64.zip)**
 
 在已安装游戏、BPP（已自带 BepInEx）和 .NET 8 Runtime 的开发机上运行：
 
@@ -76,6 +76,16 @@ SHA-256 复验和旧版本备份，失败时会尝试恢复原版本。
 退出码 `0` 表示成功，`1` 表示安装错误，`2` 表示依赖或目标目录检查未通过。
 
 ## 数据兼容性
+
+BazaarLab 启动后会等待游戏静态数据管理器就绪，并以只读方式检查官方
+`GameData.db`。首次运行或检测到数据库变化时，会自动把 `cards` 表导出为完整
+JSONL 卡表，按内容 SHA-256 保存到 `BepInEx/config/BazaarLab/catalogs/`，验证完成后
+再原子切换。卡表检查或生成期间暂停本地预测；未知战斗规则会在模拟前报告为
+不兼容，不再继续输出可能误导的胜率。
+
+新阵容码记录实际规则集 SHA-256。本地保留对应历史卡表时可以复现旧版本阵容；
+双方规则集不同或对应历史卡表缺失时，本地对战会拒绝混合规则计算。旧版
+`BL1/LIL1` 阵容码继续兼容，但因没有内容哈希，只能使用当前规则集作为参考。
 
 BazaarLab 使用 `bazaarlab-combat-snapshot-v1` 快照格式，并继续只读兼容早期的
 `lookingin-localcombat-bpp-snapshot-v1` 历史快照。升级时会尝试把

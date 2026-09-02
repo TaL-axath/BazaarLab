@@ -306,6 +306,14 @@ public sealed partial class Plugin
 
     private void StartNextEncounterPreview()
     {
+        if (!CanUseCatalog(out string catalogReason))
+        {
+            foreach (EncounterPreviewEntry pending in _encounterPreviews.Values)
+            {
+                if (pending.Result is null) pending.Status = catalogReason;
+            }
+            return;
+        }
         while (_encounterPreviewQueue.Count > 0)
         {
             string id = _encounterPreviewQueue.Dequeue();
@@ -628,15 +636,7 @@ public sealed partial class Plugin
     private string CurrentMonsterDataFingerprint()
     {
         string runtime = typeof(Data).Assembly.GetName().Version?.ToString() ?? "unknown";
-        try
-        {
-            var catalog = new FileInfo(GetCatalogFile());
-            return runtime + ":" + catalog.Length + ":" + catalog.LastWriteTimeUtc.Ticks;
-        }
-        catch (Exception)
-        {
-            return runtime;
-        }
+        return runtime + ":" + GetCatalogFingerprint();
     }
 
     private void LoadMonsterCalibrations()

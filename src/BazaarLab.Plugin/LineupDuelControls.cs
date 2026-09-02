@@ -50,6 +50,7 @@ public sealed partial class Plugin
     private string? _lineupDuelResultPath;
     private string? _lineupDuelTracePath;
     private string? _lineupDuelSimulationPath;
+    private string? _lineupDuelCatalogPath;
     private string _lineupDuelPhase = string.Empty;
     private int _lineupDuelTraceEvents;
     private bool _lineupAutoPlayRequested;
@@ -61,14 +62,7 @@ public sealed partial class Plugin
 
     private void InitializeLineupDuelControls()
     {
-        string catalog = Path.Combine(Paths.GameRootPath, ".reverse", "catalog",
-            "official-cards.jsonl");
-        if (File.Exists(catalog))
-        {
-            var info = new FileInfo(catalog);
-            _catalogFingerprint = info.Length.ToString("x") + "-" +
-                info.LastWriteTimeUtc.Ticks.ToString("x");
-        }
+        _catalogFingerprint = GetCatalogFingerprint();
         string cache = Path.Combine(_outputDirectory, "last-stable-lineup.json");
         if (File.Exists(cache))
         {
@@ -146,6 +140,11 @@ public sealed partial class Plugin
         IReadOnlyDictionary<string, int> opponentAttributes, uint day, uint hour,
         string messageId, string captureId)
     {
+        if (!CanUseCatalog(out string reason))
+        {
+            Logger.LogWarning("PvP lineup-code capture paused: " + reason);
+            return;
+        }
         _combatOpeningPlayerLineup = BuildSnapshotLineup(playerHero, playerAttributes,
             snapshots.PlayerHand, snapshots.PlayerSkills, "combat-opening-player");
         _combatOpeningOpponentLineup = BuildSnapshotLineup(opponentHero, opponentAttributes,
@@ -306,6 +305,9 @@ public sealed partial class Plugin
         GUILayout.EndHorizontal();
 
         GUILayout.Label(_lineupStatus);
+        GUILayout.Label("卡表：" + _catalogStatus + " · " +
+            (IsSha256(GetCatalogFingerprint())
+                ? GetCatalogFingerprint().Substring(0, 12) : GetCatalogFingerprint()));
         if (_lineupDuelResult is not null)
         {
             GUILayout.Label($"A 胜率 {_lineupDuelResult.PlayerOutcomeProbability:P1}   " +
@@ -360,6 +362,11 @@ public sealed partial class Plugin
 
     private void ExportPreferredTo(ref string target)
     {
+        if (!CanUseCatalog(out string catalogReason))
+        {
+            _lineupStatus = catalogReason;
+            return;
+        }
         LineupEnvelopeDto? lineup = Data.IsInCombat
             ? _combatOpeningPlayerLineup ?? _lastStableLineup
             : TryBuildCurrentLineup() ?? _lastStableLineup;
@@ -371,6 +378,12 @@ public sealed partial class Plugin
 
     private void CopyPreferredLineup()
     {
+        if (!CanUseCatalog(out string catalogReason))
+        {
+            _lineupStatus = catalogReason;
+            ShowLineupClipboardToast(catalogReason, false);
+            return;
+        }
         LineupEnvelopeDto? lineup = Data.IsInCombat
             ? _combatOpeningPlayerLineup ?? _lastStableLineup
             : TryBuildCurrentLineup() ?? _lastStableLineup;
@@ -413,6 +426,11 @@ public sealed partial class Plugin
 
     private void ExportOpponentToB()
     {
+        if (!CanUseCatalog(out string catalogReason))
+        {
+            _lineupStatus = catalogReason;
+            return;
+        }
         if (_combatOpeningOpponentLineup is null)
         {
             _lineupStatus = "没有可用的对手开战阵容快照";
@@ -424,6 +442,7 @@ public sealed partial class Plugin
 
     private LineupEnvelopeDto? TryBuildCurrentLineup()
     {
+        if (!CanUseCatalog(out _)) return null;
         Player? player = Data.Run?.Player;
         if (player is null || CardController.IsAnyCardDragging ||
             AppState.IsWaitingForServerResponse || IsMoving) return null;
@@ -459,7 +478,10 @@ public sealed partial class Plugin
                 throw new InvalidDataException("seed must be a 32-bit integer");
 
             string core = GetRuntimeFile("BazaarLab.Combat.dll");
-            string catalog = GetCatalogFile();
+            if (!TryResolveCatalogForLineups(a.catalog_fingerprint, b.catalog_fingerprint,
+                    out string catalog, out string catalogError))
+                throw new InvalidDataException(catalogError);
+            _lineupDuelCatalogPath = catalog;
             if (!File.Exists(core) || !File.Exists(catalog))
                 throw new FileNotFoundException("local combat runtime or catalog is missing");
             string directory = Path.Combine(_outputDirectory, "local-duels");
@@ -589,7 +611,7 @@ public sealed partial class Plugin
         string simulationPath = _lineupDuelSimulationPath ??
             throw new InvalidDataException("simulation path missing");
         string core = GetRuntimeFile("BazaarLab.Combat.dll");
-        string catalog = GetCatalogFile();
+        string catalog = _lineupDuelCatalogPath ?? GetCatalogFile();
         if (!int.TryParse(_lineupSeed, out int seed))
             throw new InvalidDataException("seed must be a 32-bit integer");
         string dotnet = Path.Combine(Environment.GetFolderPath(
@@ -648,7 +670,13 @@ public sealed partial class Plugin
     };
 
     private string[] CatalogWarnings(LineupEnvelopeDto a, LineupEnvelopeDto b) =>
-        a.catalog_fingerprint == _catalogFingerprint && b.catalog_fingerprint == _catalogFingerprint
+        (string.Equals(a.catalog_fingerprint, _catalogFingerprint,
+             StringComparison.OrdinalIgnoreCase) &&
+         string.Equals(b.catalog_fingerprint, _catalogFingerprint,
+             StringComparison.OrdinalIgnoreCase)) ||
+        (IsSha256(a.catalog_fingerprint) &&
+         string.Equals(a.catalog_fingerprint, b.catalog_fingerprint,
+             StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(_lineupDuelCatalogPath))
             ? Array.Empty<string>() : new[] { "lineup code catalog fingerprint differs" };
 
     private static object DuelSet(string label, int owner, string section,

@@ -187,6 +187,11 @@ public sealed partial class Plugin
 
     private void StartBaselineCalculation(string fingerprint)
     {
+        if (!CanUseCatalog(out string catalogReason))
+        {
+            _baselineStatus = catalogReason;
+            return;
+        }
         try
         {
             CaptureLiveInventory(DateTime.UtcNow);

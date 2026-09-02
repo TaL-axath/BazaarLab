@@ -22,7 +22,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "com.bazaarlab.plugin";
     public const string PluginName = "BazaarLab";
-    public const string PluginVersion = "1.0.5";
+    public const string PluginVersion = "1.0.6";
 
     private static Plugin? _instance;
     private Harmony? _harmony;
@@ -70,15 +70,13 @@ public sealed partial class Plugin : BaseUnityPlugin
     private static string GetRuntimeFile(string fileName) =>
         Path.Combine(Paths.PluginPath, "BazaarLab", "runtime", fileName);
 
-    private static string GetCatalogFile() =>
-        Path.Combine(Paths.PluginPath, "BazaarLab", "data", "official-cards.jsonl");
-
     private void Awake()
     {
         _instance = this;
         _outputDirectory = Path.Combine(Paths.ConfigPath, "BazaarLab");
         MigrateLegacyOutputDirectory(_outputDirectory);
         Directory.CreateDirectory(_outputDirectory);
+        InitializeCatalogManager();
         InitializePlacementControls();
         InitializeMonsterCombatControls();
         InitializeBaselineCurveControls();
@@ -102,6 +100,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 
     private void OnDestroy()
     {
+        DisposeCatalogManager();
         DisposePlacementControls();
         DisposeMonsterCombatControls();
         DisposeBaselineCurveControls();
@@ -116,6 +115,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 
     private void Update()
     {
+        UpdateCatalogManager();
         UpdateLineupDuelControls();
         UpdateDecisionTrace();
         UpdatePlacementControls();

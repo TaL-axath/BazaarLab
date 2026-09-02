@@ -263,7 +263,15 @@ public static class BppSnapshotValidator
         {
             try
             {
-                definition.Materialize(tier, enchantment, runtimeAttributes);
+                MaterializedCardDefinition materialized = definition.Materialize(
+                    tier, enchantment, runtimeAttributes);
+                IReadOnlyList<string> unsupported = CombatRuleSupport.FindUnsupported(
+                    materialized, setSection);
+                if (unsupported.Count > 0)
+                {
+                    errors.Add($"{cardLabel}: unsupported combat rules: " +
+                        string.Join(", ", unsupported));
+                }
             }
             catch (InvalidDataException exception)
             {

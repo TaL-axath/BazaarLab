@@ -5,6 +5,10 @@ if (args.Length == 7 && string.Equals(
     args[0], "project-bpp-replay", StringComparison.OrdinalIgnoreCase))
 {
     OfficialCardCatalog catalog = OfficialCardCatalog.LoadJsonLines(args[1]);
+    BppSnapshotValidationReport validation =
+        BppSnapshotValidator.ValidateLive(args[2], catalog);
+    if (!validation.PredictionReady)
+        throw new InvalidDataException(string.Join("; ", validation.Errors));
     BppSnapshotImportResult imported = BppCombatSnapshotAdapter.Import(args[2], catalog);
     CombatSimulationResult simulation = CombatSimulation.Run(
         imported.State, int.Parse(args[3]), int.Parse(args[4]), captureReplayTrace: true);
@@ -435,6 +439,16 @@ if (File.Exists(officialCards))
 {
     OfficialCardCatalog catalog = OfficialCardCatalog.LoadJsonLines(officialCards);
     AssertEqual(3289, catalog.Count, "official catalog count");
+    using JsonDocument futureRuleDocument = JsonDocument.Parse(
+        """{"Trigger":{"$type":"TTriggerOnItemUsed"},"Action":{"$type":"TActionFuturePatch"},"WorksIn":"CombatOnly"}""");
+    var futureRuleCard = new MaterializedCardDefinition(
+        "future-rule", "Future Rule", "TCardItem", "Small", "Diamond", null,
+        new Dictionary<string, int>(), new HashSet<string>(), new HashSet<string>(),
+        [new MaterializedEffectDefinition("future", "Ability", "test",
+            futureRuleDocument.RootElement.Clone())]);
+    AssertEqual("TActionFuturePatch",
+        CombatRuleSupport.FindUnsupported(futureRuleCard, "Hand").Single(),
+        "unknown combat action is rejected before simulation");
     BppSnapshotValidationReport validLiveSnapshot = BppSnapshotValidator.ValidateLiveJson(
         """
         {"schema":"lookingin-localcombat-bpp-snapshot-v1","combatants":[{"id":"player","hero":"Hero8","attributes":{"Health":100,"HealthMax":100}},{"id":"opponent","hero":"Vanessa","attributes":{"Health":100,"HealthMax":100}}],"card_sets":[{"owner":0,"section":"Hand","items":[]},{"owner":0,"section":"Skills","items":[]},{"owner":1,"section":"Hand","items":[{"instance_id":"valid-aila","template_id":"00ab28d4-c3d2-420e-ba71-b88bc29f4834","tier":"Diamond","enchant":"","size":"Small","socket":"Socket_0","attributes":{"CooldownMax":4000,"Multicast":1,"DamageAmount":80,"Custom_0":40},"tags":["Toy","Weapon","Friend"]}]},{"owner":1,"section":"Skills","items":[]}]}

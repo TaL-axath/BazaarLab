@@ -21,6 +21,10 @@ if (samples <= 0 || maximumTicks <= 0 || intervalTicks <= 0)
 {
     throw new ArgumentOutOfRangeException(nameof(args), "samples, ticks and interval must be positive");
 }
+BppSnapshotValidationReport validation = BppSnapshotValidator.ValidatePlacementJson(
+    File.ReadAllText(snapshotPath), catalog);
+if (!validation.PredictionReady)
+    throw new InvalidDataException(string.Join("; ", validation.Errors));
 
 int pointCount = maximumTicks / intervalTicks + 1;
 double[] damage = new double[pointCount];

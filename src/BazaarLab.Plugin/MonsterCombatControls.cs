@@ -190,6 +190,11 @@ public sealed partial class Plugin
         {
             return;
         }
+        if (!CanUseCatalog(out string catalogReason))
+        {
+            SetMonsterStatus(catalogReason);
+            return;
+        }
         var opponent = Data.Run?.Opponent;
         if (!IsLiveMonsterEncounterReady() || IsCombatOrReplayActive() || opponent is null)
         {

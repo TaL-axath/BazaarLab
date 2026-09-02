@@ -16,10 +16,12 @@ $references = @(
     'netstandard.dll',
     'System.dll',
     'System.Core.dll',
+    'System.Data.dll',
     'System.Runtime.dll',
     'System.Memory.dll',
     'System.IO.Compression.dll',
     'System.Text.Json.dll',
+    'Mono.Data.Sqlite.dll',
     'MessagePack.dll',
     'MessagePack.Annotations.dll',
     'UnityEngine.dll',
@@ -50,6 +52,7 @@ $arguments = @(
 $arguments += $references | ForEach-Object { '/reference:' + $_ }
 $arguments += @(
     (Join-Path $projectDirectory 'Plugin.cs'),
+    (Join-Path $projectDirectory 'CatalogManager.cs'),
     (Join-Path $projectDirectory 'PlacementControls.cs'),
     (Join-Path $projectDirectory 'MonsterCombatControls.cs'),
     (Join-Path $projectDirectory 'BaselineCurveControls.cs'),
