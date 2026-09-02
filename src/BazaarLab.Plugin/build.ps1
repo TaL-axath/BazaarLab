@@ -21,7 +21,7 @@ $references = @(
     'System.Memory.dll',
     'System.IO.Compression.dll',
     'System.Text.Json.dll',
-    'Mono.Data.Sqlite.dll',
+    'Gilzoide.SqliteNet.dll',
     'MessagePack.dll',
     'MessagePack.Annotations.dll',
     'UnityEngine.dll',
@@ -29,6 +29,7 @@ $references = @(
     'UnityEngine.IMGUIModule.dll'
     'UnityEngine.UIModule.dll'
     'UnityEngine.UI.dll'
+    'Unity.TextMeshPro.dll'
 ) | ForEach-Object { Join-Path $managedDirectory $_ }
 $references += @(
     (Join-Path $bepInExDirectory 'core\BepInEx.dll'),
@@ -61,6 +62,7 @@ $arguments += @(
     (Join-Path $projectDirectory 'LineupDuelControls.cs'),
     (Join-Path $projectDirectory 'NativeReplayPlayback.cs')
     (Join-Path $projectDirectory 'FloatingWindowControls.cs')
+    (Join-Path $projectDirectory 'BazaarLabUiComponents.cs')
 )
 & dotnet $arguments
 if ($LASTEXITCODE -ne 0) {

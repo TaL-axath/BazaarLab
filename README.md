@@ -2,6 +2,15 @@
 
 BazaarLab 是一个面向《The Bazaar》的本地阵容实验与战斗分析插件。
 
+## 项目来源与声明
+
+BazaarLab 基于 LookingIN 进行二次开发与独立功能扩展。LookingIN 的官方发布、安装包
+和项目说明请前往 **[LookingIN-Distribution](https://github.com/LookingIN97/LookingIN-Distribution)**。
+
+BazaarLab 是独立维护的非官方项目，与 LookingIN 作者不存在隶属或官方合作关系。
+本仓库不包含、不重新分发 LookingIN 的源码或二进制文件；LookingIN 仍适用其自身的
+专有许可协议。
+
 当前功能包括：
 
 - 本地战斗模拟与双方阵容码对战；
@@ -74,6 +83,13 @@ SHA-256 复验和旧版本备份，失败时会尝试恢复原版本。
 ```
 
 退出码 `0` 表示成功，`1` 表示安装错误，`2` 表示依赖或目标目录检查未通过。
+
+## 发布说明规范
+
+后续每个 GitHub Release 的说明必须包含实际的功能更新内容、完整 Commit SHA，以及
+对应 Windows 安装包的 SHA-256。固定格式和发布前检查项见
+[`RELEASING.md`](RELEASING.md)。只有修复而没有新增功能时，也必须在“功能更新”中
+明确写明本版没有新增功能，不能省略该部分。
 
 ## 数据兼容性
 

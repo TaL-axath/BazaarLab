@@ -122,6 +122,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         UpdateMonsterCombatControls();
         UpdateEncounterPreviewControls();
         UpdateBaselineCurveControls();
+        UpdateFloatingWindowControls();
         DateTime now = DateTime.UtcNow;
         if (now < _nextLiveInventoryCaptureUtc)
         {
@@ -141,11 +142,8 @@ public sealed partial class Plugin : BaseUnityPlugin
 
     private void OnGUI()
     {
-        DrawPlacementControls();
         DrawMonsterCombatControls();
-        DrawBaselineCurveControls();
         DrawEncounterPreviewControls();
-        DrawLineupDuelControls();
     }
 
     private void CaptureLiveInventory(DateTime recordedAtUtc)

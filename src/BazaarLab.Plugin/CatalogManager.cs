@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Data;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -9,7 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using BepInEx;
-using Mono.Data.Sqlite;
+using SQLite;
 using TheBazaar;
 using UnityEngine;
 
@@ -77,6 +76,12 @@ public sealed partial class Plugin
         public CatalogManifest Manifest { get; }
         public string CatalogPath { get; }
         public bool Generated { get; }
+    }
+
+    private sealed class CatalogCardRow
+    {
+        public string Id { get; set; } = string.Empty;
+        public byte[] Data { get; set; } = Array.Empty<byte>();
     }
 
     private void InitializeCatalogManager()
@@ -263,19 +268,16 @@ public sealed partial class Plugin
         try
         {
             var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            using (var connection = new SqliteConnection(
-                "Data Source=" + source.Path + ";Version=3;Read Only=True;"))
+            using (var connection = new SQLiteConnection(source.Path,
+                SQLiteOpenFlags.ReadOnly))
             {
-                connection.Open();
-                using SqliteCommand command = connection.CreateCommand();
-                command.CommandText = "SELECT Id, Data FROM cards ORDER BY Id";
-                using IDataReader reader = command.ExecuteReader();
                 using var output = new StreamWriter(temporary, false,
                     new UTF8Encoding(false), 65536);
-                while (reader.Read())
+                foreach (CatalogCardRow row in connection.Query<CatalogCardRow>(
+                    "SELECT Id, Data FROM cards ORDER BY Id", Array.Empty<object>()))
                 {
-                    string rowId = reader.GetString(0);
-                    string payload = reader.GetString(1);
+                    string rowId = row.Id;
+                    string payload = Encoding.UTF8.GetString(row.Data);
                     using JsonDocument document = JsonDocument.Parse(payload);
                     JsonElement root = document.RootElement;
                     if (root.ValueKind != JsonValueKind.Object ||
