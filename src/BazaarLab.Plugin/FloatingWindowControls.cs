@@ -12,6 +12,8 @@ namespace BazaarLab.Plugin;
 public sealed partial class Plugin
 {
     private Canvas? _labCanvas;
+    private Texture2D? _labRoundedTexture;
+    private Sprite? _labRoundedSprite;
     private RuntimeUiTheme? _labTheme;
     private float _nextThemeProbeAt;
     private readonly List<Image> _labPanels = new();
@@ -37,6 +39,7 @@ public sealed partial class Plugin
     private Button? _lineupClearButton, _lineupPlayButton;
     private RectTransform? _lineupToastRoot;
     private string _uiLastCodeA = "\0", _uiLastCodeB = "\0";
+    private const float UnifiedWindowWidth = 630f;
 
     private sealed class RuntimeUiTheme
     {
@@ -68,6 +71,7 @@ public sealed partial class Plugin
     private void InitializeFloatingWindowControls()
     {
         _labTheme = ResolveRuntimeUiTheme();
+        _labRoundedSprite = CreateRoundedSprite(out _labRoundedTexture);
         GameObject root = new("BazaarLab.NativeUi");
         DontDestroyOnLoad(root);
         _labCanvas = root.AddComponent<Canvas>();
@@ -88,7 +92,11 @@ public sealed partial class Plugin
     private void DisposeFloatingWindowControls()
     {
         if (_labCanvas is not null) Destroy(_labCanvas.gameObject);
+        if (_labRoundedSprite is not null) Destroy(_labRoundedSprite);
+        if (_labRoundedTexture is not null) Destroy(_labRoundedTexture);
         _labCanvas = null;
+        _labRoundedSprite = null;
+        _labRoundedTexture = null;
         _placementUi = null;
         _baselineUi = null;
         _lineupUi = null;
@@ -122,17 +130,17 @@ public sealed partial class Plugin
 
     private void CreatePlacementWindow(Transform parent)
     {
-        _placementUi = CreateWindow(parent, "Placement", "本地摆位规划", 340f, 270f,
-            new Vector2(-358f, -70f), true,
+        _placementUi = CreateWindow(parent, "Placement", "本地摆位规划",
+            UnifiedWindowWidth, 270f, new Vector2(-648f, -70f), true,
             () => _placementWindowMinimized = !_placementWindowMinimized);
         RectTransform body = _placementUi.Body;
-        _placementPlanButton = CreateButton(body, "规划", 10f, 10f, 98f, 34f,
+        _placementPlanButton = CreateButton(body, "规划", 10f, 10f, 195f, 34f,
             StartPlacementSearch).Button;
-        _placementApplyButton = CreateButton(body, "应用", 116f, 10f, 98f, 34f,
+        _placementApplyButton = CreateButton(body, "应用", 213f, 10f, 195f, 34f,
             StartMovePlan).Button;
-        _placementUndoButton = CreateButton(body, "撤销", 222f, 10f, 98f, 34f,
+        _placementUndoButton = CreateButton(body, "撤销", 416f, 10f, 194f, 34f,
             StartUndoPlan).Button;
-        Image progressBackground = CreateImage(body, "进度背景", 10f, 53f, 310f, 22f,
+        Image progressBackground = CreateImage(body, "进度背景", 10f, 53f, 600f, 22f,
             true, new Color(0f, 0f, 0f, 0.55f));
         _labInputs.Add(progressBackground);
         GameObject fillObject = new("进度");
@@ -146,13 +154,13 @@ public sealed partial class Plugin
         fill.offsetMin = new Vector2(2f, 2f);
         fill.offsetMax = new Vector2(2f, -2f);
         _placementProgressText = CreateText(progressBackground.transform, "等待启动", 12f,
-            TextAlignmentOptions.Center, 0f, 0f, 310f, 22f);
+            TextAlignmentOptions.Center, 0f, 0f, 600f, 22f);
         _placementStatusText = CreateText(body, string.Empty, 15f,
-            TextAlignmentOptions.TopLeft, 10f, 82f, 310f, 46f);
+            TextAlignmentOptions.TopLeft, 10f, 82f, 600f, 46f);
         _placementScoreText = CreateText(body, string.Empty, 13f,
-            TextAlignmentOptions.TopLeft, 10f, 128f, 310f, 40f);
+            TextAlignmentOptions.TopLeft, 10f, 128f, 600f, 40f);
         _placementBoardText = CreateText(body, string.Empty, 14f,
-            TextAlignmentOptions.TopLeft, 10f, 168f, 310f, 76f);
+            TextAlignmentOptions.TopLeft, 10f, 168f, 600f, 76f);
         _placementBoardText.overflowMode = TextOverflowModes.Truncate;
     }
 
@@ -205,7 +213,7 @@ public sealed partial class Plugin
     private void CreateBaselineWindow(Transform parent)
     {
         _baselineUi = CreateWindow(parent, "Baseline", "30 秒无限血白板——累计输出",
-            630f, 306f, new Vector2(18f, -754f), false,
+            UnifiedWindowWidth, 306f, new Vector2(18f, -754f), false,
             () => _baselineWindowMinimized = !_baselineWindowMinimized);
         RectTransform body = _baselineUi.Body;
         _baselineSummaryText = CreateText(body, string.Empty, 14f,
@@ -266,13 +274,14 @@ public sealed partial class Plugin
 
     private void CreateLineupWindow(Transform parent)
     {
-        _lineupUi = CreateWindow(parent, "Lineup", "本地阵容码对战", 690f, 574f,
+        _lineupUi = CreateWindow(parent, "Lineup", "本地阵容码对战",
+            UnifiedWindowWidth, 574f,
             new Vector2(18f, -70f), false,
             () => _lineupWindowMinimized = !_lineupWindowMinimized);
         RectTransform title = _lineupUi.Title.rectTransform;
-        CreateButton(title, "打开历史目录", 398f, 4f, 122f, 26f,
+        CreateButton(title, "打开历史目录", 338f, 4f, 122f, 26f,
             OpenLineupHistoryDirectory);
-        CreateButton(title, "复制当前阵容", 526f, 4f, 126f, 26f,
+        CreateButton(title, "复制当前阵容", 464f, 4f, 126f, 26f,
             CopyPreferredLineup);
         RectTransform body = _lineupUi.Body;
         CreateButton(body, "当前阵容 → A", 10f, 8f, 150f, 32f,
@@ -281,19 +290,19 @@ public sealed partial class Plugin
             () => ExportPreferredTo(ref _lineupCodeB));
         CreateButton(body, "对手阵容 → B", 326f, 8f, 150f, 32f, ExportOpponentToB);
         CreateText(body, "阵容 A", 14f, TextAlignmentOptions.Left, 10f, 47f, 90f, 22f);
-        _lineupInputA = CreateInput(body, "阵容 A", 10f, 69f, 660f, 70f, true);
+        _lineupInputA = CreateInput(body, "阵容 A", 10f, 69f, 600f, 70f, true);
         _lineupInputA.onValueChanged.AddListener(value => _lineupCodeA = value);
         CreateButton(body, "粘贴 A", 10f, 145f, 86f, 28f,
             () => _lineupCodeA = GUIUtility.systemCopyBuffer.Trim());
         _lineupDescriptionA = CreateText(body, string.Empty, 13f,
-            TextAlignmentOptions.Left, 104f, 145f, 566f, 28f);
+            TextAlignmentOptions.Left, 104f, 145f, 506f, 28f);
         CreateText(body, "阵容 B", 14f, TextAlignmentOptions.Left, 10f, 178f, 90f, 22f);
-        _lineupInputB = CreateInput(body, "阵容 B", 10f, 200f, 660f, 70f, true);
+        _lineupInputB = CreateInput(body, "阵容 B", 10f, 200f, 600f, 70f, true);
         _lineupInputB.onValueChanged.AddListener(value => _lineupCodeB = value);
         CreateButton(body, "粘贴 B", 10f, 276f, 86f, 28f,
             () => _lineupCodeB = GUIUtility.systemCopyBuffer.Trim());
         _lineupDescriptionB = CreateText(body, string.Empty, 13f,
-            TextAlignmentOptions.Left, 104f, 276f, 566f, 28f);
+            TextAlignmentOptions.Left, 104f, 276f, 506f, 28f);
         CreateButton(body, "交换", 10f, 312f, 74f, 34f, () =>
         {
             string temporary = _lineupCodeA;
@@ -314,12 +323,12 @@ public sealed partial class Plugin
         _lineupPlayButton = play.Button;
         _lineupPlayText = play.Text;
         _lineupStatusText = CreateText(body, string.Empty, 14f,
-            TextAlignmentOptions.TopLeft, 10f, 355f, 660f, 48f);
+            TextAlignmentOptions.TopLeft, 10f, 355f, 600f, 48f);
         _lineupCatalogText = CreateText(body, string.Empty, 13f,
-            TextAlignmentOptions.TopLeft, 10f, 407f, 660f, 25f);
+            TextAlignmentOptions.TopLeft, 10f, 407f, 600f, 25f);
         _lineupResultText = CreateText(body, string.Empty, 14f,
-            TextAlignmentOptions.TopLeft, 10f, 437f, 660f, 82f);
-        Image toast = CreateImage(_lineupUi.Root, "提示", 180f, 38f, 340f, 38f,
+            TextAlignmentOptions.TopLeft, 10f, 437f, 600f, 82f);
+        Image toast = CreateImage(_lineupUi.Root, "提示", 145f, 38f, 340f, 38f,
             true, new Color(0.12f, 0.24f, 0.12f, 0.98f));
         _labInputs.Add(toast);
         _lineupToastRoot = toast.rectTransform;
@@ -521,6 +530,41 @@ public sealed partial class Plugin
         rect.sizeDelta = new Vector2(width, height);
     }
 
+    private static Sprite CreateRoundedSprite(out Texture2D texture)
+    {
+        const int size = 48;
+        const float radius = 12f;
+        texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
+        {
+            name = "BazaarLab.RoundedRectangle",
+            wrapMode = TextureWrapMode.Clamp,
+            filterMode = FilterMode.Bilinear,
+        };
+        var pixels = new Color[size * size];
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                float px = x + 0.5f;
+                float py = y + 0.5f;
+                float dx = Math.Max(Math.Abs(px - size * 0.5f) -
+                    (size * 0.5f - radius), 0f);
+                float dy = Math.Max(Math.Abs(py - size * 0.5f) -
+                    (size * 0.5f - radius), 0f);
+                float distance = Mathf.Sqrt(dx * dx + dy * dy);
+                float alpha = Mathf.Clamp01(radius + 0.75f - distance);
+                pixels[y * size + x] = new Color(1f, 1f, 1f, alpha);
+            }
+        }
+        texture.SetPixels(pixels);
+        texture.Apply(false, true);
+        Sprite sprite = Sprite.Create(texture, new Rect(0f, 0f, size, size),
+            new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect,
+            new Vector4(13f, 13f, 13f, 13f));
+        sprite.name = "BazaarLab.RoundedRectangleSprite";
+        return sprite;
+    }
+
     private static void SyncInput(TMP_InputField? input, string value)
     {
         if (input is null || input.isFocused || string.Equals(input.text, value,
@@ -573,31 +617,40 @@ public sealed partial class Plugin
         RuntimeUiTheme theme = _labTheme ?? new RuntimeUiTheme();
         foreach (Image panel in _labPanels.Where(value => value is not null))
         {
-            panel.sprite = null;
-            panel.type = Image.Type.Simple;
+            panel.sprite = _labRoundedSprite;
+            panel.type = Image.Type.Sliced;
             panel.color = theme.PanelColor;
+            EnsureRoundedOutline(panel, new Color(0.62f, 0.43f, 0.16f, 0.48f), 1.25f);
         }
         foreach (Image button in _labButtons.Where(value => value is not null))
         {
-            button.sprite = null;
-            button.type = Image.Type.Simple;
+            button.sprite = _labRoundedSprite;
+            button.type = Image.Type.Sliced;
             button.color = theme.ButtonColor;
+            EnsureRoundedOutline(button, new Color(0.74f, 0.52f, 0.18f, 0.62f), 1f);
             Button? control = button.GetComponent<Button>();
             if (control is not null) control.transition = Selectable.Transition.ColorTint;
         }
         foreach (Image button in _labCompactButtons.Where(value => value is not null))
         {
-            button.sprite = null;
-            button.type = Image.Type.Simple;
+            button.sprite = _labRoundedSprite;
+            button.type = Image.Type.Sliced;
             button.color = theme.ButtonColor;
+            EnsureRoundedOutline(button, new Color(0.74f, 0.52f, 0.18f, 0.58f), 0.8f);
             Button? control = button.GetComponent<Button>();
             if (control is not null) control.transition = Selectable.Transition.ColorTint;
         }
         foreach (Image input in _labInputs.Where(value => value is not null))
         {
-            input.sprite = null;
-            input.type = Image.Type.Simple;
+            input.sprite = _labRoundedSprite;
+            input.type = Image.Type.Sliced;
             input.color = theme.InputColor;
+            EnsureRoundedOutline(input, new Color(0.48f, 0.39f, 0.23f, 0.42f), 0.75f);
+        }
+        if (_placementProgressFill is not null)
+        {
+            _placementProgressFill.sprite = _labRoundedSprite;
+            _placementProgressFill.type = Image.Type.Sliced;
         }
         foreach (TMP_Text text in _labTexts.Where(value => value is not null))
         {
@@ -611,11 +664,20 @@ public sealed partial class Plugin
         ApplyTitleTheme(_lineupUi, theme);
     }
 
-    private static void ApplyTitleTheme(LabWindow? window, RuntimeUiTheme theme)
+    private void ApplyTitleTheme(LabWindow? window, RuntimeUiTheme theme)
     {
         if (window is null) return;
-        window.Title.sprite = null;
-        window.Title.type = Image.Type.Simple;
+        window.Title.sprite = _labRoundedSprite;
+        window.Title.type = Image.Type.Sliced;
         window.Title.color = theme.TitleColor;
+        EnsureRoundedOutline(window.Title, new Color(0.7f, 0.48f, 0.16f, 0.52f), 1f);
+    }
+
+    private static void EnsureRoundedOutline(Image image, Color color, float distance)
+    {
+        Outline outline = image.GetComponent<Outline>() ?? image.gameObject.AddComponent<Outline>();
+        outline.effectColor = color;
+        outline.effectDistance = new Vector2(distance, -distance);
+        outline.useGraphicAlpha = true;
     }
 }

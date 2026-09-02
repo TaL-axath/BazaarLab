@@ -22,7 +22,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "com.bazaarlab.plugin";
     public const string PluginName = "BazaarLab";
-    public const string PluginVersion = "1.0.6";
+    public const string PluginVersion = "1.0.7";
 
     private static Plugin? _instance;
     private Harmony? _harmony;

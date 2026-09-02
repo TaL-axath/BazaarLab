@@ -4,12 +4,11 @@ BazaarLab 是一个面向《The Bazaar》的本地阵容实验与战斗分析插
 
 ## 项目来源与声明
 
-BazaarLab 基于 LookingIN 进行二次开发与独立功能扩展。LookingIN 的官方发布、安装包
+BazaarLab 基于 LookingIN 进行二次开发与独立功能扩展，并已获得 LookingIN 作者本人
+授权。LookingIN 的官方发布、安装包
 和项目说明请前往 **[LookingIN-Distribution](https://github.com/LookingIN97/LookingIN-Distribution)**。
 
-BazaarLab 是独立维护的非官方项目，与 LookingIN 作者不存在隶属或官方合作关系。
-本仓库不包含、不重新分发 LookingIN 的源码或二进制文件；LookingIN 仍适用其自身的
-专有许可协议。
+BazaarLab 由本仓库独立维护；本仓库不包含或重新分发 LookingIN 的源码与二进制文件。
 
 当前功能包括：
 
@@ -54,7 +53,7 @@ BazaarPlusPlus 和游戏本体。BPP 的官方安装包已经自带所需的 Bep
 
 ## Windows 分享安装包
 
-**[直接下载 BazaarLab v1.0.6 Windows x64 安装包](https://github.com/TaL-axath/BazaarLab/releases/download/v1.0.6/BazaarLab-v1.0.6-Windows-x64.zip)**
+**[直接下载 BazaarLab v1.0.7 Windows x64 安装包](https://github.com/TaL-axath/BazaarLab/releases/download/v1.0.7/BazaarLab-v1.0.7-Windows-x64.zip)**
 
 在已安装游戏、BPP（已自带 BepInEx）和 .NET 8 Runtime 的开发机上运行：
 
