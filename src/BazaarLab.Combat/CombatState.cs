@@ -4,6 +4,10 @@ public sealed class CombatantState
 {
     public required string Id { get; init; }
     public string? Hero { get; set; }
+    // null preserves the legacy state-wide behavior. Preview adapters set this
+    // explicitly because live player attributes include auras while static
+    // monster attributes do not.
+    public bool? AttributesArePrecomputed { get; set; }
     public int MaxHealth { get; set; }
     public int Health { get; set; }
     public int Shield { get; set; }
@@ -21,7 +25,9 @@ public sealed class CombatantState
     public int GetAttribute(string attribute) => attribute switch
     {
         "Health" => Health,
-        "HealthMax" => MaxHealth,
+        // During an aura pass Attributes already contains earlier HealthMax
+        // contributions while MaxHealth is synchronized at the end of the pass.
+        "HealthMax" => Attributes.GetValueOrDefault("HealthMax", MaxHealth),
         "Shield" => Shield,
         "Burn" => Burn,
         "Poison" => Poison,
@@ -69,8 +75,8 @@ public sealed class CombatCardState
     public required MaterializedCardDefinition Definition { get; set; }
     public required CombatantState Owner { get; init; }
     public string Section { get; init; } = "Hand";
-    public int BoardPosition { get; init; }
-    public int Span { get; init; } = 1;
+    public int BoardPosition { get; set; }
+    public int Span { get; set; } = 1;
     public int CooldownRemainingMilliseconds { get; set; }
     public bool IsDisabled { get; set; }
     public bool IsDestroyed { get; set; }

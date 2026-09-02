@@ -148,6 +148,7 @@ public sealed class CombatAuraRuntime
                 foreach (CombatCardState target in TargetResolver.ResolveCardTarget(
                     action.GetObjectOrNull("Target"), context, null))
                 {
+                    if (!target.AttributesArePrecomputed) continue;
                     int current = target.IntrinsicAttributes.GetValueOrDefault(attribute);
                     target.SetIntrinsicAttribute(attribute, InvertOperation(current, amount, operation));
                 }
@@ -157,6 +158,7 @@ public sealed class CombatAuraRuntime
                 foreach (CombatantState target in TargetResolver.ResolvePlayers(
                     action.GetObjectOrNull("Target"), context))
                 {
+                    if (!AreAttributesPrecomputed(target)) continue;
                     int current = target.IntrinsicAttributes.GetValueOrDefault(attribute);
                     target.SetIntrinsicAttribute(attribute, InvertOperation(current, amount, operation));
                 }
@@ -227,21 +229,26 @@ public sealed class CombatAuraRuntime
         }
     }
 
-    private static void InvertAdditiveMultiplyGroups(
+    private void InvertAdditiveMultiplyGroups(
         Dictionary<(CombatCardState Target, string Attribute), double> cardGroups,
         Dictionary<(CombatantState Target, string Attribute), double> playerGroups)
     {
         foreach (((CombatCardState target, string attribute), double amount) in cardGroups)
         {
+            if (!target.AttributesArePrecomputed) continue;
             int current = target.IntrinsicAttributes.GetValueOrDefault(attribute);
             target.SetIntrinsicAttribute(attribute, UnscaleAdditiveMultiply(current, amount));
         }
         foreach (((CombatantState target, string attribute), double amount) in playerGroups)
         {
+            if (!AreAttributesPrecomputed(target)) continue;
             int current = target.IntrinsicAttributes.GetValueOrDefault(attribute);
             target.SetIntrinsicAttribute(attribute, UnscaleAdditiveMultiply(current, amount));
         }
     }
+
+    private bool AreAttributesPrecomputed(CombatantState target) =>
+        target.AttributesArePrecomputed ?? _state.CardAttributesArePrecomputed;
 
     private static int ScaleAdditiveMultiply(int value, double amount) =>
         RoundAwayFromZero(value * (1d + amount));
@@ -316,14 +323,47 @@ public sealed class CombatAuraRuntime
         _state.Combatants
             .SelectMany(combatant => combatant.Cards)
             .Where(card => !card.IsDisabled && !card.IsDestroyed)
-            .OrderBy(card => _state.Combatants.IndexOf(card.Owner))
-            .ThenBy(card => card.BoardPosition)
-            .ThenBy(card => card.InstanceId, StringComparer.Ordinal)
             .SelectMany(card => card.Definition.Effects
                 .Where(effect => effect.Kind == "Aura" &&
                     CombatEffectActivation.IsActive(effect, card))
-                .OrderBy(effect => effect.Id, StringComparer.Ordinal)
-                .Select(effect => (card, effect)));
+                .Select(effect => (Card: card, Effect: effect)))
+            // Resolve base card-derived values first (for example Pawn Shop
+            // SellPrice), then max-health auras, then card values that read the
+            // effective max health. This removes board-order dependence.
+            .OrderBy(value => AuraDependencyPhase(value.Effect))
+            .ThenBy(value => _state.Combatants.IndexOf(value.Card.Owner))
+            .ThenBy(value => value.Card.BoardPosition)
+            .ThenBy(value => value.Card.InstanceId, StringComparer.Ordinal)
+            .ThenBy(value => value.Effect.Id, StringComparer.Ordinal);
+
+    private static int AuraDependencyPhase(MaterializedEffectDefinition effect)
+    {
+        JsonElement? action = effect.Definition.GetObjectOrNull("Action");
+        if (action is null) return 0;
+        if (action.Value.GetStringOrNull("$type") == "TAuraActionPlayerModifyAttribute" &&
+            action.Value.GetStringOrNull("AttributeType") == "HealthMax")
+        {
+            return 1;
+        }
+        return ContainsPlayerHealthMaxReference(action.Value) ? 2 : 0;
+    }
+
+    private static bool ContainsPlayerHealthMaxReference(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            if (value.GetStringOrNull("$type") is string type &&
+                type.StartsWith("TReferenceValuePlayerAttribute", StringComparison.Ordinal) &&
+                value.GetStringOrNull("AttributeType") == "HealthMax")
+            {
+                return true;
+            }
+            return value.EnumerateObject().Any(property =>
+                ContainsPlayerHealthMaxReference(property.Value));
+        }
+        return value.ValueKind == JsonValueKind.Array &&
+            value.EnumerateArray().Any(ContainsPlayerHealthMaxReference);
+    }
 
     private static void ApplyCardAttributeAura(JsonElement action, CombatActionContext context)
     {

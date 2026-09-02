@@ -601,6 +601,79 @@ if (File.Exists(officialCards))
     AssertEqual(2772, precomputedHealthPlayer.MaxHealth,
         "precomputed additive-multiply aura round-trip");
 
+    MaterializedCardDefinition pawnShop = catalog
+        .Get("31b35938-9402-4990-b4d9-473ce5887af9").Materialize("Diamond");
+    MaterializedCardDefinition massiveCleaver = catalog
+        .Get("1340399f-3cb1-46b6-8aaa-8f7f272a0911").Materialize("Diamond");
+    MaterializedCardDefinition scythe = catalog
+        .Get("0c710f33-d0fd-40c8-aa2d-34fc20f23140").Materialize("Diamond");
+    var staticMonsterAuraState = new CombatState { CardAttributesArePrecomputed = true };
+    var staticMonster = new CombatantState
+    {
+        Id = "static-monster",
+        MaxHealth = 1000,
+        Health = 1000,
+        AttributesArePrecomputed = false,
+    };
+    staticMonster.SetIntrinsicAttribute("HealthMax", 1000);
+    staticMonsterAuraState.Combatants.Add(staticMonster);
+    staticMonsterAuraState.Combatants.Add(new CombatantState
+    {
+        Id = "static-monster-opponent",
+        MaxHealth = 3000,
+        Health = 3000,
+        AttributesArePrecomputed = true,
+    });
+    CombatCardState staticPawnShop = CombatCardState.Create(
+        "static-pawn-shop", pawnShop, staticMonster, 6, "Hand", 3);
+    staticPawnShop.SetIntrinsicAttribute("SellPrice", 20);
+    staticPawnShop.AttributesArePrecomputed = false;
+    CombatCardState healthReferenceWeapon = CombatCardState.Create(
+        "health-reference-weapon", massiveCleaver, staticMonster, 0, "Hand", 3);
+    healthReferenceWeapon.AttributesArePrecomputed = false;
+    CombatCardState enemyHealthReferenceWeapon = CombatCardState.Create(
+        "enemy-health-reference-weapon", scythe, staticMonster, 3, "Hand", 3);
+    enemyHealthReferenceWeapon.AttributesArePrecomputed = false;
+    var staticMonsterAuras = new CombatAuraRuntime(
+        staticMonsterAuraState, new XorShiftCombatRandom(SeedMixer.Mix(152, 0)));
+    staticMonsterAuras.Recompute();
+    AssertEqual(1500, staticMonster.MaxHealth,
+        "static monster receives Pawn Shop max-health aura instead of unbaking it");
+    AssertEqual(1500, staticMonster.Health,
+        "opening max-health aura grants the matching opening health");
+    AssertEqual(225, healthReferenceWeapon.Attributes.GetValueOrDefault("DamageAmount"),
+        "health-reference weapon sees max-health auras in the same opening pass");
+    AssertEqual(1000,
+        enemyHealthReferenceWeapon.Attributes.GetValueOrDefault("DamageAmount"),
+        "Void Knight Scythe reads one third of the enemy's effective max health");
+
+    var livePawnState = new CombatState { CardAttributesArePrecomputed = true };
+    var livePawnOwner = new CombatantState
+    {
+        Id = "live-pawn-owner",
+        MaxHealth = 1500,
+        Health = 1500,
+        AttributesArePrecomputed = true,
+    };
+    livePawnOwner.SetIntrinsicAttribute("HealthMax", 1500);
+    livePawnState.Combatants.Add(livePawnOwner);
+    livePawnState.Combatants.Add(new CombatantState
+    {
+        Id = "live-pawn-opponent", MaxHealth = 1000, Health = 1000,
+        AttributesArePrecomputed = true,
+    });
+    CombatCardState livePawnShop = CombatCardState.Create(
+        "live-pawn-shop", pawnShop, livePawnOwner, 0, "Hand", 3);
+    livePawnShop.SetIntrinsicAttribute("SellPrice", 20);
+    livePawnShop.AttributesArePrecomputed = true;
+    var livePawnAuras = new CombatAuraRuntime(
+        livePawnState, new XorShiftCombatRandom(SeedMixer.Mix(153, 0)));
+    livePawnAuras.Recompute();
+    AssertEqual(1000, livePawnOwner.IntrinsicAttributes.GetValueOrDefault("HealthMax"),
+        "live Pawn Shop snapshot unbakes its already-applied max-health aura");
+    AssertEqual(1500, livePawnOwner.MaxHealth,
+        "live Pawn Shop snapshot does not double-apply max health");
+
     MaterializedCardDefinition heavyFogshroom = catalog
         .Get("15d84898-4217-4bc3-ae12-7bd70641e646")
         .Materialize("Diamond", "Heavy");
@@ -1856,12 +1929,55 @@ if (File.Exists(officialCards))
     copyState.Combatants.Add(copyPlayer);
     CombatCardState copySource = CombatCardState.Create(
         "copy-source", hologram, copyPlayer, 0, "Hand", 2);
-    CombatCardState.Create("copy-model", aila, copyPlayer, 2, "Hand", 1);
+    MaterializedCardDefinition ailaGold = catalog
+        .Get("00ab28d4-c3d2-420e-ba71-b88bc29f4834")
+        .Materialize("Gold");
+    CombatCardState copyModel = CombatCardState.Create(
+        "copy-model", ailaGold, copyPlayer, 2, "Hand", 1);
+    copyModel.SetIntrinsicAttribute("Custom_9", 777);
     var copyRules = new CombatRuleRuntime(
         copyState, new XorShiftCombatRandom(SeedMixer.Mix(149, 0)));
     copyRules.StartFight();
-    AssertEqual(aila.TemplateId, copySource.Definition.TemplateId,
+    AssertEqual(ailaGold.TemplateId, copySource.Definition.TemplateId,
         "target-filter transform copies selected card definition");
+    AssertEqual("Gold", copySource.Definition.Tier,
+        "target-filter transform copies selected card tier");
+    AssertEqual(777, copySource.IntrinsicAttributes.GetValueOrDefault("Custom_9"),
+        "target-filter transform copies selected card intrinsic attributes");
+
+    using JsonDocument splitTransformDocument = JsonDocument.Parse("""
+        {"Id":"split-transform","Trigger":{"$type":"TTriggerOnCardFired"},"Action":{"$type":"TActionCardTransform","SpawnContext":{"$type":"TSpawnContextQuery","Groups":[{"$type":"TSpawnGroup","Filters":[{"$type":"TSpawnFilterIdList","Ids":["020a0ec0-21e6-41af-899f-063573ba9ca5"]}],"SelectionMethod":"Sequential","Limit":null,"Prerequisites":null,"RandomWeight":0,"Behaviors":null}],"SelectionMethod":"Sequential","Limit":{"$type":"TFixedValue","Value":2},"Behaviors":[{"$type":"TSpawnBehaviorInheritTier","Inherits":true}]},"Duration":{"$type":"TDeterminantDuration","DurationType":"UntilEndOfCombat"},"Abilities":null,"TargetCount":null,"Target":{"$type":"TTargetCardSelf","Conditions":null},"Cost":null},"Prerequisites":null,"Priority":"Medium"}
+        """);
+    var splitState = new CombatState { CardCatalog = catalog };
+    var splitPlayer = new CombatantState { Id = "split-player", MaxHealth = 100, Health = 100 };
+    splitState.Combatants.Add(splitPlayer);
+    MaterializedCardDefinition splitDefinition = aila with
+    {
+        Size = "Medium",
+        Effects = [new MaterializedEffectDefinition(
+            "split-transform", "Ability", "test", splitTransformDocument.RootElement.Clone())],
+    };
+    CombatCardState splitSource = CombatCardState.Create(
+        "split-source", splitDefinition, splitPlayer, 0, "Hand", 2);
+    var splitRules = new CombatRuleRuntime(
+        splitState, new XorShiftCombatRandom(SeedMixer.Mix(150, 0)));
+    splitRules.FireCard(splitSource);
+    AssertEqual(2, splitPlayer.Cards.Count,
+        "medium transform can split into two small cards");
+    AssertEqual(true, splitPlayer.Cards.All(card =>
+        card.Definition.TemplateId == virus.TemplateId && card.Span == 1),
+        "split transform materializes and positions every replacement");
+
+    using JsonDocument emptyTransformDocument = JsonDocument.Parse("""
+        {"Id":"empty-transform","Action":{"$type":"TActionCardTransform","SpawnContext":{"$type":"TSpawnContextQuery","Groups":[{"$type":"TSpawnGroup","Filters":[{"$type":"TSpawnFilterIdList","Ids":["missing-template"]}],"SelectionMethod":"Sequential","Limit":null,"Prerequisites":null,"RandomWeight":0,"Behaviors":null}],"SelectionMethod":"Sequential","Limit":{"$type":"TFixedValue","Value":1},"Behaviors":null},"Duration":null,"Abilities":null,"TargetCount":null,"Target":{"$type":"TTargetCardSelf","Conditions":null},"Cost":null}}
+        """);
+    ActionExecutionResult emptyTransformResult = CombatActionDispatcher.Execute(
+        new MaterializedEffectDefinition(
+            "empty-transform", "Ability", "test", emptyTransformDocument.RootElement.Clone()),
+        new CombatActionContext(splitState, splitSource,
+            new XorShiftCombatRandom(SeedMixer.Mix(151, 0))));
+    AssertEqual(true, emptyTransformResult.Supported,
+        "empty legal transform pool is a supported no-op");
 
     var frozenState = new CombatState();
     var frozenPlayer = new CombatantState { Id = "frozen-player", MaxHealth = 100, Health = 100 };

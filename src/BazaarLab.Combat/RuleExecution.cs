@@ -314,43 +314,67 @@ public static class CombatActionDispatcher
 
         if (actionType is "TActionCardTransform" or "TActionCardTransformDestroyed")
         {
-            List<CombatCardState> targets = actionType == "TActionCardTransformDestroyed" &&
-                action.GetObjectOrNull("Target")?.GetStringOrNull("$type") ==
-                    "TTargetCardTriggerTarget" && context.TriggerTarget is not null
-                ? [context.TriggerTarget]
-                : TargetResolver.ResolveCards(action, context);
+            List<CombatCardState> targets = ResolveTransformationTargets(
+                action, actionType, context);
+            if (targets.Count == 0)
+            {
+                // A transform with no legal target is a normal no-op (Virus is the
+                // common combat example), not an unsupported action.
+                return new ActionExecutionResult(true, actionType, 0);
+            }
+            bool supported = true;
             int changed = 0;
             foreach (CombatCardState target in targets)
             {
-                if (TryChooseTransformation(action, target, context,
-                    out MaterializedCardDefinition? replacement) && replacement is not null)
+                int originalPosition = target.BoardPosition;
+                int availableSpan = Math.Max(1, target.Span);
+                int replacementLimit = Math.Max(1, RuleValueEvaluator.EvaluateToInt(
+                    action.GetObjectOrNull("SpawnContext")?.GetObjectOrNull("Limit"), context));
+                int occupiedSpan = 0;
+                for (int index = 0; index < replacementLimit; index++)
                 {
-                    ApplyTransformation(target, replacement);
-                    target.IsDestroyed = false;
-                    target.IsDisabled = false;
-                    changed++;
-                    context.State.Events.Add(new CombatEvent(
-                        context.State.Tick, "CardTransformed", target.InstanceId,
-                        SourceId: context.SourceCard.InstanceId));
-                    if (actionType == "TActionCardTransformDestroyed")
+                    TransformationChoiceStatus status = TryChooseTransformation(
+                        action, target, context, out MaterializedCardDefinition? replacement);
+                    if (status == TransformationChoiceStatus.Unsupported)
                     {
-                        int spawnCount = Math.Max(1, RuleValueEvaluator.EvaluateToInt(
-                            action.GetObjectOrNull("SpawnContext")?.GetObjectOrNull("Limit"), context));
-                        for (int index = 1; index < spawnCount; index++)
-                        {
-                            CombatCardState clone = CombatCardState.Create(
-                                $"{target.InstanceId}:transform:{context.State.Tick}:{index}",
-                                replacement, target.Owner, target.BoardPosition,
-                                target.Section, target.Span);
-                            clone.CooldownRemainingMilliseconds = clone.GetEffectiveCooldownMilliseconds();
-                            context.State.Events.Add(new CombatEvent(
-                                context.State.Tick, "CardTransformedSpawn", clone.InstanceId,
-                                SourceId: context.SourceCard.InstanceId));
-                        }
+                        supported = false;
+                        break;
                     }
+                    if (status == TransformationChoiceStatus.NoCandidate || replacement is null)
+                    {
+                        break;
+                    }
+                    int replacementSpan = SizeToSpan(replacement.Size);
+                    if (occupiedSpan + replacementSpan > availableSpan)
+                    {
+                        break;
+                    }
+                    if (index == 0)
+                    {
+                        ApplyTransformation(target, replacement, replacementSpan);
+                        target.BoardPosition = originalPosition;
+                        target.IsDestroyed = false;
+                        target.IsDisabled = false;
+                        context.State.Events.Add(new CombatEvent(
+                            context.State.Tick, "CardTransformed", target.InstanceId,
+                            SourceId: context.SourceCard.InstanceId));
+                    }
+                    else
+                    {
+                        CombatCardState clone = CombatCardState.Create(
+                            $"{target.InstanceId}:transform:{context.State.Tick}:{index}",
+                            replacement, target.Owner, originalPosition + occupiedSpan,
+                            target.Section, replacementSpan);
+                        clone.CooldownRemainingMilliseconds = clone.GetEffectiveCooldownMilliseconds();
+                        context.State.Events.Add(new CombatEvent(
+                            context.State.Tick, "CardTransformedSpawn", clone.InstanceId,
+                            SourceId: context.SourceCard.InstanceId));
+                    }
+                    occupiedSpan += replacementSpan;
+                    changed++;
                 }
             }
-            return new ActionExecutionResult(changed == targets.Count, actionType, changed);
+            return new ActionExecutionResult(supported, actionType, changed);
         }
 
         if (actionType == "TActionCardUpgrade")
@@ -563,7 +587,40 @@ public static class CombatActionDispatcher
         return true;
     }
 
-    private static bool TryChooseTransformation(
+    private enum TransformationChoiceStatus
+    {
+        Selected,
+        NoCandidate,
+        Unsupported,
+    }
+
+    private sealed record TransformationCandidate(
+        OfficialCardDefinition Definition,
+        CombatCardState? SourceCard);
+
+    private static List<CombatCardState> ResolveTransformationTargets(
+        JsonElement action,
+        string actionType,
+        CombatActionContext context)
+    {
+        if (actionType != "TActionCardTransformDestroyed")
+        {
+            return TargetResolver.ResolveCards(action, context);
+        }
+        string targetType = action.GetObjectOrNull("Target")?.GetStringOrNull("$type")
+            ?? string.Empty;
+        return targetType switch
+        {
+            "TTargetCardSelf" => [context.SourceCard],
+            "TTargetCardTriggerSource" when context.TriggerSource is not null =>
+                [context.TriggerSource],
+            "TTargetCardTriggerTarget" when context.TriggerTarget is not null =>
+                [context.TriggerTarget],
+            _ => TargetResolver.ResolveCards(action, context),
+        };
+    }
+
+    private static TransformationChoiceStatus TryChooseTransformation(
         JsonElement action,
         CombatCardState target,
         CombatActionContext context,
@@ -575,9 +632,9 @@ public static class CombatActionDispatcher
         if (catalog is null || spawnContext is null ||
             spawnContext.Value.GetArrayOrNull("Groups") is not JsonElement groupsElement)
         {
-            return false;
+            return TransformationChoiceStatus.Unsupported;
         }
-        var groups = new List<(JsonElement Definition, List<OfficialCardDefinition> Cards)>();
+        var groups = new List<(JsonElement Definition, List<TransformationCandidate> Cards)>();
         foreach (JsonElement group in groupsElement.EnumerateArray())
         {
             if (group.GetArrayOrNull("Prerequisites") is JsonElement prerequisites &&
@@ -586,7 +643,8 @@ public static class CombatActionDispatcher
             {
                 continue;
             }
-            List<OfficialCardDefinition> candidates = catalog.Cards.ToList();
+            List<TransformationCandidate> candidates = catalog.Cards
+                .Select(card => new TransformationCandidate(card, null)).ToList();
             if (group.GetArrayOrNull("Filters") is JsonElement filters)
             {
                 foreach (JsonElement filter in filters.EnumerateArray())
@@ -599,27 +657,93 @@ public static class CombatActionDispatcher
                                 .Where(value => value is not null).Cast<string>()
                                 .ToHashSet(StringComparer.OrdinalIgnoreCase)
                             : [];
-                        candidates = candidates.Where(card => ids.Contains(card.Id)).ToList();
+                        candidates = candidates.Where(card => ids.Contains(card.Definition.Id)).ToList();
                     }
                     else if (filterType == "TSpawnFilterTarget")
                     {
-                        HashSet<string> ids = TargetResolver.ResolveCardTarget(
-                                filter.GetObjectOrNull("Target"), context, null)
-                            .Select(card => card.Definition.TemplateId)
-                            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-                        candidates = candidates.Where(card => ids.Contains(card.Id)).ToList();
+                        List<CombatCardState> sourceCards = TargetResolver.ResolveCardTarget(
+                            filter.GetObjectOrNull("Target"), context, null);
+                        var sourceCandidates = new List<TransformationCandidate>();
+                        foreach (CombatCardState sourceCard in sourceCards)
+                        {
+                            if (catalog.TryGet(sourceCard.Definition.TemplateId,
+                                out OfficialCardDefinition? definition) && definition is not null &&
+                                candidates.Any(value => string.Equals(value.Definition.Id,
+                                    definition.Id, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                sourceCandidates.Add(new TransformationCandidate(definition, sourceCard));
+                            }
+                        }
+                        candidates = sourceCandidates;
                     }
                     else if (filterType == "TSpawnFilterQuery" &&
                         filter.GetObjectOrNull("Constraints") is JsonElement constraints)
                     {
-                        candidates = candidates.Where(card => MatchesSpawnConstraint(
-                            card, constraints, target, context)).ToList();
+                        if (!IsSupportedSpawnConstraint(constraints))
+                        {
+                            return TransformationChoiceStatus.Unsupported;
+                        }
+                        candidates = candidates.Where(card =>
+                            string.Equals(card.Definition.SpawningEligibility, "Always",
+                                StringComparison.OrdinalIgnoreCase) &&
+                            MatchesSpawnConstraint(
+                                card.Definition, constraints, target, context)).ToList();
                     }
                     else
                     {
-                        candidates.Clear();
+                        return TransformationChoiceStatus.Unsupported;
                     }
                 }
+            }
+            JsonElement[] groupBehaviors = (spawnContext.Value.GetArrayOrNull("Behaviors") is JsonElement outerBehaviors
+                    ? outerBehaviors.EnumerateArray() : [])
+                .Concat(group.GetArrayOrNull("Behaviors") is JsonElement innerBehaviors
+                    ? innerBehaviors.EnumerateArray() : [])
+                .ToArray();
+            bool excludesPlayerHero = groupBehaviors.Any(value =>
+                value.GetStringOrNull("$type") == "TSpawnBehaviorExcludePlayerHero");
+            bool ignoresHero = groupBehaviors.Any(value =>
+                value.GetStringOrNull("$type") == "TSpawnBehaviorIgnoreHero" &&
+                value.GetPropertyOrNull("IgnoreHero")?.GetBoolean() == true);
+            if (!ignoresHero && !excludesPlayerHero &&
+                context.SourceCard.Owner.Hero is string restrictedHero)
+            {
+                candidates = candidates.Where(value =>
+                    value.SourceCard is not null ||
+                    value.Definition.Heroes.Contains("Common") ||
+                    value.Definition.Heroes.Contains(restrictedHero)).ToList();
+            }
+            if (groupBehaviors.Any(value =>
+                value.GetStringOrNull("$type") == "TSpawnBehaviorInheritSize" &&
+                value.GetPropertyOrNull("Inherits")?.GetBoolean() == true))
+            {
+                candidates = candidates.Where(value => string.Equals(
+                    value.Definition.Size, target.Definition.Size,
+                    StringComparison.OrdinalIgnoreCase)).ToList();
+            }
+            if (excludesPlayerHero &&
+                context.SourceCard.Owner.Hero is string playerHero)
+            {
+                candidates = candidates.Where(value =>
+                    !value.Definition.Heroes.Contains(playerHero)).ToList();
+            }
+            JsonElement? fixedTierBehavior = groupBehaviors.FirstOrDefault(value =>
+                value.GetStringOrNull("$type") == "TSpawnBehaviorTier");
+            string? fixedTier = fixedTierBehavior is JsonElement fixedTierElement &&
+                fixedTierElement.GetArrayOrNull("Tiers") is JsonElement fixedTiers
+                ? fixedTiers.EnumerateArray().FirstOrDefault().GetString()
+                : null;
+            bool doesNotInheritTier = groupBehaviors.Any(value =>
+                value.GetStringOrNull("$type") == "TSpawnBehaviorInheritTier" &&
+                value.GetPropertyOrNull("Inherits")?.GetBoolean() == false);
+            if (fixedTier is not null)
+            {
+                candidates = candidates.Where(value => value.Definition.HasTier(fixedTier)).ToList();
+            }
+            else if (!doesNotInheritTier)
+            {
+                candidates = candidates.Where(value => value.SourceCard is not null ||
+                    value.Definition.HasTier(target.Definition.Tier)).ToList();
             }
             if (candidates.Count > 0)
             {
@@ -628,7 +752,7 @@ public static class CombatActionDispatcher
         }
         if (groups.Count == 0)
         {
-            return false;
+            return TransformationChoiceStatus.NoCandidate;
         }
         int groupIndex = 0;
         if (spawnContext.Value.GetStringOrNull("SelectionMethod") == "Random" && groups.Count > 1)
@@ -650,16 +774,21 @@ public static class CombatActionDispatcher
                 }
             }
         }
-        (JsonElement selectedGroup, List<OfficialCardDefinition> selectedCards) = groups[groupIndex];
-        OfficialCardDefinition selected = selectedCards.Count == 1
+        (JsonElement selectedGroup, List<TransformationCandidate> selectedCards) = groups[groupIndex];
+        TransformationCandidate candidate = selectedCards.Count == 1
             ? selectedCards[0]
             : selectedCards[context.Random.Next(selectedCards.Count)];
+        OfficialCardDefinition selected = candidate.Definition;
         JsonElement[] behaviors = (spawnContext.Value.GetArrayOrNull("Behaviors") is JsonElement outer
                 ? outer.EnumerateArray() : [])
             .Concat(selectedGroup.GetArrayOrNull("Behaviors") is JsonElement inner
                 ? inner.EnumerateArray() : [])
             .ToArray();
-        string tier = target.Definition.Tier;
+        bool explicitlyDoesNotInheritTier = behaviors.Any(value =>
+            value.GetStringOrNull("$type") == "TSpawnBehaviorInheritTier" &&
+            value.GetPropertyOrNull("Inherits")?.GetBoolean() == false);
+        string tier = candidate.SourceCard?.Definition.Tier ??
+            (explicitlyDoesNotInheritTier ? selected.StartingTier : target.Definition.Tier);
         JsonElement? tierBehavior = behaviors.FirstOrDefault(value =>
             value.GetStringOrNull("$type") == "TSpawnBehaviorTier");
         if (tierBehavior is JsonElement explicitTier &&
@@ -670,15 +799,48 @@ public static class CombatActionDispatcher
         }
         if (!selected.HasTier(tier))
         {
-            return false;
+            tier = selected.StartingTier;
+            if (!selected.HasTier(tier))
+            {
+                return TransformationChoiceStatus.NoCandidate;
+            }
         }
-        bool inheritEnchantment = behaviors.Any(value =>
-            value.GetStringOrNull("$type") == "TSpawnBehaviorInheritEnchantment" &&
-            value.GetPropertyOrNull("Inherits")?.GetBoolean() == true);
-        string? enchantment = inheritEnchantment && target.Definition.Enchantment is string current &&
+        JsonElement? enchantmentBehavior = behaviors.FirstOrDefault(value =>
+            value.GetStringOrNull("$type") == "TSpawnBehaviorInheritEnchantment");
+        bool inheritEnchantment = enchantmentBehavior is JsonElement explicitEnchantment
+            ? explicitEnchantment.GetPropertyOrNull("Inherits")?.GetBoolean() == true
+            : candidate.SourceCard is not null;
+        string? inheritedEnchantment = candidate.SourceCard?.Definition.Enchantment ??
+            target.Definition.Enchantment;
+        string? enchantment = inheritEnchantment && inheritedEnchantment is string current &&
             selected.HasEnchantment(current) ? current : null;
-        replacement = selected.Materialize(tier, enchantment, target.IntrinsicAttributes);
-        return true;
+        replacement = selected.Materialize(tier, enchantment,
+            candidate.SourceCard?.IntrinsicAttributes ?? target.IntrinsicAttributes);
+        if (candidate.SourceCard is CombatCardState copiedCard)
+        {
+            replacement = replacement with
+            {
+                Attributes = new Dictionary<string, int>(copiedCard.IntrinsicAttributes,
+                    StringComparer.Ordinal),
+                Tags = new HashSet<string>(copiedCard.IntrinsicTags, StringComparer.Ordinal),
+                HiddenTags = new HashSet<string>(copiedCard.IntrinsicHiddenTags,
+                    StringComparer.Ordinal),
+            };
+        }
+        return TransformationChoiceStatus.Selected;
+    }
+
+    private static bool IsSupportedSpawnConstraint(JsonElement constraint)
+    {
+        string type = constraint.GetStringOrNull("$type") ?? string.Empty;
+        if (type is "ConstraintAnd" or "ConstraintOr")
+        {
+            return constraint.GetArrayOrNull("Constraints") is JsonElement children &&
+                children.EnumerateArray().All(IsSupportedSpawnConstraint);
+        }
+        return type is "ConstraintCardType" or "ConstraintTag" or
+            "ConstraintHiddenTag" or "ConstraintSize" or "ConstraintTier" or
+            "ConstraintHero" or "ConstraintEnchantmentEligible";
     }
 
     private static bool MatchesSpawnConstraint(
@@ -706,7 +868,9 @@ public static class CombatActionDispatcher
             "ConstraintSize" => MatchesStrings(card.Size, constraint.GetArrayOrNull("Sizes")),
             "ConstraintTier" => constraint.GetArrayOrNull("Tiers") is JsonElement tiers &&
                 tiers.EnumerateArray().Any(value => value.GetString() is string tier && card.HasTier(tier)),
-            "ConstraintHero" => context.SourceCard.Owner.Hero is string hero && card.Heroes.Contains(hero),
+            "ConstraintHero" => constraint.GetArrayOrNull("Heroes") is JsonElement heroes &&
+                heroes.EnumerateArray().Any(value =>
+                    value.GetString() is string hero && card.Heroes.Contains(hero)),
             "ConstraintEnchantmentEligible" => constraint.GetArrayOrNull("Enchantments") is JsonElement enchants &&
                 enchants.EnumerateArray().Any(value =>
                     value.GetString() is string enchantment && card.HasEnchantment(enchantment)),
@@ -719,9 +883,17 @@ public static class CombatActionDispatcher
         values is JsonElement array && array.EnumerateArray().Any(item =>
             string.Equals(item.GetString(), value, StringComparison.OrdinalIgnoreCase));
 
+    private static int SizeToSpan(string size) => size switch
+    {
+        "Large" => 3,
+        "Medium" => 2,
+        _ => 1,
+    };
+
     private static void ApplyTransformation(
         CombatCardState target,
-        MaterializedCardDefinition replacement)
+        MaterializedCardDefinition replacement,
+        int replacementSpan)
     {
         var statuses = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (string attribute in new[] { "Haste", "Slow", "Freeze", "Flying" })
@@ -748,6 +920,7 @@ public static class CombatActionDispatcher
         target.IntrinsicHiddenTags.UnionWith(replacement.HiddenTags);
         target.HiddenTags.Clear();
         target.HiddenTags.UnionWith(replacement.HiddenTags);
+        target.Span = replacementSpan;
         target.AttributesArePrecomputed = false;
         target.CooldownRemainingMilliseconds = target.GetEffectiveCooldownMilliseconds();
     }
@@ -1245,17 +1418,7 @@ public static class RuleValueEvaluator
         {
             return definition.GetPropertyOrNull("DefaultValue")?.GetSingle() ?? 0;
         }
-        CombatantState target = targets[0];
-        return attribute switch
-        {
-            "Health" => target.Health,
-            "HealthMax" => target.MaxHealth,
-            "Shield" => target.Shield,
-            "Burn" => target.Burn,
-            "Poison" => target.Poison,
-            "Regen" => target.Regen,
-            _ => target.Attributes.GetValueOrDefault(attribute),
-        };
+        return targets[0].GetAttribute(attribute);
     }
 
     private static float ApplyModifier(

@@ -442,8 +442,10 @@ public sealed partial class Plugin
             combatants = new object[]
             {
                 new { id = "player", hero = player.Hero.ToString(),
+                    attributes_precomputed = true,
                     attributes = ConvertAttributes(player.Attributes) },
                 new { id = "opponent", hero = "Common",
+                    attributes_precomputed = calibration is not null,
                     attributes = opponentAttributes },
             },
             card_sets = new[] { playerHand, playerSkills, opponentHand, opponentSkills },

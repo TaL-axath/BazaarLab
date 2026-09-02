@@ -1028,6 +1028,7 @@ public static class PlacementOptimizer
             {
                 Id = combatant.Id,
                 Hero = combatant.Hero,
+                AttributesArePrecomputed = combatant.AttributesArePrecomputed,
                 MaxHealth = combatant.MaxHealth,
                 Health = combatant.Health,
                 Shield = combatant.Shield,

@@ -52,6 +52,9 @@ public sealed class OfficialCardDefinition
     public string Id => _root.GetStringOrNull("Id") ?? string.Empty;
     public string Type => _root.GetStringOrNull("$type") ?? string.Empty;
     public string Size => _root.GetStringOrNull("Size") ?? "Small";
+    public string StartingTier => _root.GetStringOrNull("StartingTier") ?? "Bronze";
+    public string SpawningEligibility =>
+        _root.GetStringOrNull("SpawningEligibility") ?? "Never";
     public string InternalName => _root.GetStringOrNull("InternalName") ?? string.Empty;
     public string Name => _root
         .GetObjectOrNull("Localization")?

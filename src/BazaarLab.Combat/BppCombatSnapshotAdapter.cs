@@ -53,6 +53,8 @@ public static class BppCombatSnapshotAdapter
                     Id = GetString(definition, "id", "Id") ?? $"combatant-{state.Combatants.Count}",
                     MaxHealth = defaultHealth,
                     Health = defaultHealth,
+                    AttributesArePrecomputed = GetBool(
+                        definition, "attributes_precomputed", "AttributesPrecomputed"),
                 };
                 combatant.SetIntrinsicAttribute("RageMax", 100);
                 combatant.SetIntrinsicAttribute("EnragedDurationMax", 5000);
@@ -131,7 +133,9 @@ public static class BppCombatSnapshotAdapter
                     CombatCardState card = CombatCardState.Create(
                         GetString(item, "instance_id", "InstanceId") ?? Guid.NewGuid().ToString("N"),
                         materialized, state.Combatants[ownerIndex], position, section, span);
-                    card.AttributesArePrecomputed = true;
+                    card.AttributesArePrecomputed = GetBool(
+                        item, "attributes_precomputed", "AttributesPrecomputed") ??
+                        state.Combatants[ownerIndex].AttributesArePrecomputed ?? true;
                     if (attributes is not null)
                     {
                         foreach (JsonProperty attribute in attributes.Value.EnumerateObject())
@@ -280,6 +284,13 @@ public static class BppCombatSnapshotAdapter
     {
         JsonElement? property = Get(value, names);
         return property is { ValueKind: JsonValueKind.Number } ? property.Value.GetInt32() : null;
+    }
+
+    private static bool? GetBool(JsonElement value, params string[] names)
+    {
+        JsonElement? property = Get(value, names);
+        return property is { ValueKind: JsonValueKind.True } ? true :
+            property is { ValueKind: JsonValueKind.False } ? false : null;
     }
 
     private static JsonElement? GetArray(JsonElement value, params string[] names) =>
