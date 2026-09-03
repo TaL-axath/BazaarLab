@@ -1412,6 +1412,9 @@ if (File.Exists(officialCards))
     using JsonDocument repairedListenerDocument = JsonDocument.Parse("""
         {"Id":"repaired-listener","Trigger":{"$type":"TTriggerOnCardRepaired","Subject":{"$type":"TTargetCardSection","TargetSection":"OpponentHand","ExcludeSelf":false,"Conditions":null},"Source":null},"Action":{"$type":"TActionCardModifyAttribute","Value":{"$type":"TFixedValue","Value":1},"AttributeType":"Custom_7","Operation":"Add","Target":{"$type":"TTargetCardSelf","Conditions":null}},"Prerequisites":null,"Priority":"Medium"}
         """);
+    using JsonDocument disableDestructionListenerDocument = JsonDocument.Parse("""
+        {"Id":"disable-destruction-listener","Trigger":{"$type":"TTriggerOnCardPerformedDestruction","Subject":{"$type":"TTargetCardSection","TargetSection":"SelfHand","ExcludeSelf":false,"Conditions":null},"Target":null},"Action":{"$type":"TActionCardModifyAttribute","Value":{"$type":"TFixedValue","Value":1},"AttributeType":"Custom_9","Operation":"Add","Target":{"$type":"TTargetCardSelf","Conditions":null}},"Prerequisites":null,"Priority":"Immediate"}
+        """);
     static MaterializedCardDefinition TestCardWithEffect(
         string id, string type, JsonElement effect) => new(
             id, id, type, "Small", "Diamond", null,
@@ -1495,12 +1498,19 @@ if (File.Exists(officialCards))
     CombatCardState repairedListener = CombatCardState.Create("repaired-listener",
         TestCardWithEffect("repaired-listener", "TCardSkill", repairedListenerDocument.RootElement),
         lifecycleOpponent, 1, "Skills");
+    CombatCardState disableDestructionListener = CombatCardState.Create(
+        "disable-destruction-listener",
+        TestCardWithEffect("disable-destruction-listener", "TCardSkill",
+            disableDestructionListenerDocument.RootElement), lifecyclePlayer, 2, "Skills");
     var lifecycleRules = new CombatRuleRuntime(
         lifecycleState, new XorShiftCombatRandom(SeedMixer.Mix(143, 0)));
-    AssertEqual(2, lifecycleRules.FireCard(disableSource), "disable action and listener count");
+    AssertEqual(3, lifecycleRules.FireCard(disableSource),
+        "disable action dispatches disabled and performed-destruction listeners");
     AssertEqual(true, repairSource.IsDisabled, "disable marks target inactive");
     AssertEqual(1, disabledListener.Attributes.GetValueOrDefault("Custom_6"),
         "card-disabled trigger");
+    AssertEqual(1, disableDestructionListener.Attributes.GetValueOrDefault("Custom_9"),
+        "combat disable emits performed-destruction trigger");
     AssertEqual(0, lifecycleRules.FireCard(repairSource), "disabled card cannot fire");
     repairSource.IsDisabled = false;
     disableSource.IsDisabled = true;
@@ -1546,6 +1556,62 @@ if (File.Exists(officialCards))
     AssertEqual(true, destroyTarget.IsDestroyed, "successful destruction marks target inactive");
     AssertEqual(1, destructionListener.Attributes.GetValueOrDefault("Custom_5"),
         "performed-destruction trigger");
+
+    string transformReplacementId = catalog
+        .Get("00ab28d4-c3d2-420e-ba71-b88bc29f4834").Id;
+    using JsonDocument transformOnDisableDocument = JsonDocument.Parse("""
+        {"Id":"transform-on-disable","Trigger":{"$type":"TTriggerOnBeforeCardDestroyed","Subject":{"$type":"TTargetCardSelf","Conditions":null},"Source":null},"Action":{"$type":"TActionCardTransformDestroyed","SpawnContext":{"$type":"TSpawnContextQuery","Groups":[{"$type":"TSpawnGroup","Filters":[{"$type":"TSpawnFilterIdList","Ids":["__REPLACEMENT_ID__"]}],"SelectionMethod":"Random","Limit":null,"Prerequisites":null,"Behaviors":null}],"SelectionMethod":"Sequential","Limit":{"$type":"TFixedValue","Value":2},"Behaviors":null},"Target":{"$type":"TTargetCardTriggerTarget","ExcludeSelf":false,"Conditions":null}},"Prerequisites":null,"Priority":"Medium"}
+        """.Replace("__REPLACEMENT_ID__", transformReplacementId,
+            StringComparison.Ordinal));
+    var disableTransformState = new CombatState { CardCatalog = catalog, Tick = 1 };
+    var disableTransformPlayer = new CombatantState
+        { Id = "disable-transform-player", MaxHealth = 100, Health = 100 };
+    var disableTransformOpponent = new CombatantState
+        { Id = "disable-transform-opponent", MaxHealth = 100, Health = 100 };
+    disableTransformState.Combatants.Add(disableTransformPlayer);
+    disableTransformState.Combatants.Add(disableTransformOpponent);
+    CombatCardState disableTransformSource = CombatCardState.Create(
+        "disable-transform-source",
+        TestCardWithEffect("disable-transform-source", "TCardItem",
+            disableActionDocument.RootElement), disableTransformPlayer, 0);
+    CombatCardState disableTransformTarget = CombatCardState.Create(
+        "disable-transform-target",
+        TestCardWithEffect("disable-transform-original", "TCardItem",
+            transformOnDisableDocument.RootElement) with { Size = "Medium" },
+        disableTransformOpponent, 0, "Hand", 2);
+    var disableTransformRules = new CombatRuleRuntime(
+        disableTransformState, new XorShiftCombatRandom(SeedMixer.Mix(1441, 0)));
+    AssertEqual(2, disableTransformRules.FireCard(disableTransformSource),
+        "combat disable dispatches before-destroy transformation");
+    AssertEqual("00ab28d4-c3d2-420e-ba71-b88bc29f4834",
+        disableTransformTarget.Definition.TemplateId,
+        "before-destroy transformation replaces the disabled card");
+    AssertEqual(false, disableTransformTarget.IsDisabled,
+        "transformed combat-disable target remains active");
+    AssertEqual(1, disableTransformState.Events.Count(value =>
+        value.Kind == "CardTransformed" &&
+        value.ActionType == "TActionCardTransformDestroyed"),
+        "transform-destroyed event retains replay action metadata");
+    AssertEqual(1, disableTransformState.Events.Count(value =>
+        value.Kind == "CardTransformedSpawn" &&
+        value.ActionType == "TActionCardTransformDestroyed"),
+        "multi-card transform materializes the additional replacement");
+    AssertEqual(0, disableTransformState.Events.Count(value =>
+        value.Kind == "CardDisabled" && value.TargetId == disableTransformTarget.InstanceId),
+        "replacement prevents stale disabled state");
+    var transformReplaySimulation = new CombatSimulationResult(
+        0, 0, 0, 1, null, Array.Empty<CombatantSimulationResult>(),
+        disableTransformState.Events.Count,
+        new Dictionary<string, int>(),
+        new Dictionary<string, CombatEventAggregate>(),
+        disableTransformState.Events,
+        disableTransformState.Events,
+        Array.Empty<CombatCardAttributeTransition>(), string.Empty);
+    LocalReplayProjectionResult transformReplay = LocalReplayProjection.Build(
+        "disable-transform-replay", transformReplaySimulation);
+    AssertEqual(1, transformReplay.Frames.Single().Effects.Count(value =>
+        value.ActionType == "CardTransformDestroyed"),
+        "multi-card transform projects one native action against the destroyed card");
 
     using JsonDocument lethalDamageDocument = JsonDocument.Parse("""
         {"Id":"lethal","Trigger":{"$type":"TTriggerOnCardFired"},"Action":{"$type":"TActionPlayerDamage","ReferenceValue":{"$type":"TFixedValue","Value":150},"Target":{"$type":"TTargetPlayerRelative","TargetMode":"Opponent","Conditions":null}},"Prerequisites":null,"Priority":"Medium"}
@@ -2185,14 +2251,11 @@ if (File.Exists(officialCards))
     AssertEqual(1, forceRules.FireCard(forceSource), "force-use scheduling effect count");
     var forceScheduler = new CombatScheduler(forceState, forceRules);
     forceScheduler.StartFight();
-    for (int tick = 0; tick < 5; tick++)
-    {
-        forceScheduler.AdvanceOneTick();
-    }
+    forceScheduler.AdvanceOneTick();
     AssertEqual(20, forceOpponent.Health, "force-use card action executes on due tick");
-    AssertEqual(5, forceState.Events.Single(value =>
+    AssertEqual(1, forceState.Events.Single(value =>
         value.Kind == "CardDamage" && value.SourceId == "force-aila").Tick,
-        "force-use action has no second queue delay");
+        "force-use action executes on the next official frame");
 
     var frozenForceState = new CombatState();
     var frozenForcePlayer = new CombatantState
@@ -2212,10 +2275,7 @@ if (File.Exists(officialCards))
     frozenForceTarget.SetIntrinsicAttribute("Freeze", 500);
     var frozenForceScheduler = new CombatScheduler(frozenForceState, frozenForceRules);
     frozenForceScheduler.StartFight();
-    for (int tick = 0; tick < 5; tick++)
-    {
-        frozenForceScheduler.AdvanceOneTick();
-    }
+    frozenForceScheduler.AdvanceOneTick();
     AssertEqual(100, frozenForceOpponent.Health,
         "queued force-use is discarded when target is frozen at execution");
     AssertEqual(1, frozenForceState.Events.Count(value =>

@@ -167,6 +167,20 @@ public static class ActualCombatDifferential
             int count = GetInt32(property.Value, "Count", "count");
             result[action] = result.GetValueOrDefault(action) + count;
         }
+        foreach (JsonElement combatEvent in GetArray(
+            local, "FullEventTrace", "full_event_trace"))
+        {
+            if (GetString(combatEvent, "Kind", "kind") != "CardTransformed")
+            {
+                continue;
+            }
+            string? action = NormalizeLocalActionType(
+                GetString(combatEvent, "ActionType", "action_type"));
+            if (action is not null)
+            {
+                result[action] = result.GetValueOrDefault(action) + 1;
+            }
+        }
         return result;
     }
 
@@ -333,7 +347,10 @@ public static class ActualCombatDifferential
         foreach (JsonElement combatEvent in GetArray(local, "KeyEventTrace", "key_event_trace"))
         {
             string? kind = GetString(combatEvent, "Kind", "kind");
-            string? action = kind is null ? null : MapLocalEventToAction(kind);
+            string? action = kind == "CardTransformed"
+                ? NormalizeLocalActionType(GetString(
+                    combatEvent, "ActionType", "action_type"))
+                : kind is null ? null : MapLocalEventToAction(kind);
             if (action is null)
             {
                 continue;
@@ -382,6 +399,17 @@ public static class ActualCombatDifferential
             "CardUpgraded" => "CardUpgrade",
             _ => null,
         };
+    }
+
+    private static string? NormalizeLocalActionType(string? actionType)
+    {
+        if (string.IsNullOrWhiteSpace(actionType))
+        {
+            return null;
+        }
+        return actionType.StartsWith("TAction", StringComparison.Ordinal)
+            ? actionType[7..]
+            : actionType;
     }
 
     private static IEnumerable<JsonElement> ThroughFrame(

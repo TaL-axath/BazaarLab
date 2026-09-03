@@ -128,11 +128,24 @@ public static class CombatActionDispatcher
             int targetCount = 0;
             foreach (JsonElement childAction in actions.EnumerateArray())
             {
+                int firstChildEvent = context.State.Events.Count;
                 using JsonDocument childDocument = JsonDocument.Parse(
                     "{\"Action\":" + childAction.GetRawText() + "}");
                 var childEffect = new MaterializedEffectDefinition(
                     effect.Id, effect.Kind, effect.Source, childDocument.RootElement);
                 ActionExecutionResult childResult = Execute(childEffect, context);
+                for (int eventIndex = firstChildEvent;
+                    eventIndex < context.State.Events.Count; eventIndex++)
+                {
+                    CombatEvent childEvent = context.State.Events[eventIndex];
+                    if (childEvent.ActionType is null)
+                    {
+                        context.State.Events[eventIndex] = childEvent with
+                        {
+                            ActionType = childResult.ActionType,
+                        };
+                    }
+                }
                 supported &= childResult.Supported;
                 targetCount = checked(targetCount + childResult.TargetCount);
             }
@@ -289,6 +302,19 @@ public static class CombatActionDispatcher
                 bool disable = actionType == "TActionCardDisable";
                 if (target.IsDisabled == disable || target.IsDestroyed)
                 {
+                    continue;
+                }
+                if (disable)
+                {
+                    // The live combat protocol represents "destroy for the fight" as
+                    // CardDisable, but still runs TTriggerOnBeforeCardDestroyed before
+                    // the card becomes inactive.  Defer the state mutation to the rule
+                    // runtime so replacement transforms and destroy immunity can run in
+                    // the same lifecycle as the official client.
+                    context.State.Events.Add(new CombatEvent(
+                        context.State.Tick, "CardDisableRequested", target.InstanceId,
+                        SourceId: context.SourceCard.InstanceId));
+                    changed++;
                     continue;
                 }
                 target.IsDisabled = disable;

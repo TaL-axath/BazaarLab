@@ -167,7 +167,7 @@ public static class CombatSimulation
             "Heal" or "OverHeal" or "Shield" or "BurnApply" or "PoisonApply" or
             "RegenApply" or "LifeSteal" or "Burn" or "BurnShield" or "Poison" or
             "Regen" or "CardCharge" or "CardHaste" or
-            "CardSlow" or "CardFreeze" ||
+            "CardSlow" or "CardFreeze" or "CardTransformed" ||
         value.Kind is "PlayerAttribute:Tempo" or "PlayerAttribute:Rage" or
             "PlayerAttribute:Enraged" ||
         value.Kind.StartsWith("CardModifyAttribute:", StringComparison.Ordinal) ||

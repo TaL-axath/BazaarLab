@@ -241,7 +241,8 @@ public sealed record TimedPlayerModifier(
     double Amount,
     int ExpiresAtTick);
 
-public sealed record ScheduledForceUse(CombatCardState Card, int DueTick);
+public sealed record ScheduledForceUse(
+    CombatCardState Card, int DueTick, bool AllowDisabled = false);
 
 public sealed record ScheduledChargeReadyUse(CombatCardState Card, int DueTick);
 

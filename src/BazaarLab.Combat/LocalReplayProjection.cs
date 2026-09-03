@@ -63,7 +63,13 @@ public static class LocalReplayProjection
             }
             foreach (CombatEvent value in byTick[tick])
             {
-                if (!string.IsNullOrWhiteSpace(value.ExecutionContextId))
+                // CardTransformedSpawn is internal state bookkeeping for the extra
+                // cards produced by one transform action.  The native replay action
+                // must be emitted once against the destroyed card; emitting another
+                // action for every spawned card makes the client perform the random
+                // transform repeatedly.
+                if (!string.IsNullOrWhiteSpace(value.ExecutionContextId) &&
+                    value.Kind != "CardTransformedSpawn")
                 {
                     string executionKey = value.ExecutionContextId + "\0" + value.TargetId;
                     if (emittedExecutions.Add(executionKey))

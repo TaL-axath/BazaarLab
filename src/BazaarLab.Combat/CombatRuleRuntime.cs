@@ -18,6 +18,10 @@ public sealed class CombatRuleRuntime
         _scheduledEffectLaneNextTicks = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<CombatCardState, int> _chargeReadyPendingTicks =
         new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<CombatCardState> _pendingDisableTargets =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<CombatCardState> _forceActiveCards =
+        new(ReferenceEqualityComparer.Instance);
     private int _executedEffects;
     private int _dispatchDepth;
     private int _deferNonImmediateDepth;
@@ -59,7 +63,7 @@ public sealed class CombatRuleRuntime
         bool scheduleReadySignals,
         bool bypassOwnEffectScheduling = false)
     {
-        if (card.IsDisabled || card.IsDestroyed)
+        if ((card.IsDisabled && !force) || card.IsDestroyed)
         {
             return;
         }
@@ -176,21 +180,37 @@ public sealed class CombatRuleRuntime
             foreach (ScheduledForceUse scheduled in due)
             {
                 _state.ScheduledForceUses.Remove(scheduled);
-                if (scheduled.Card.Attributes.GetValueOrDefault("Freeze") <= 0)
+                if (scheduled.Card.Attributes.GetValueOrDefault("Freeze") > 0)
+                {
+                    _state.Events.Add(new CombatEvent(
+                        _state.Tick, "ForceUseBlockedByFreeze", scheduled.Card.InstanceId));
+                }
+                else if (scheduled.Card.IsDisabled && !scheduled.AllowDisabled)
+                {
+                    _state.Events.Add(new CombatEvent(
+                        _state.Tick, "ForceUseBlockedByDisable", scheduled.Card.InstanceId));
+                }
+                else
                 {
                     // Worker releases a queued force-use into UseItem on its
                     // due frame. Its own fired effects execute immediately,
                     // while nested/critical reactions remain in their lanes.
-                    FireCardCore(
-                        scheduled.Card,
-                        force: true,
-                        scheduleReadySignals: true,
-                        bypassOwnEffectScheduling: true);
-                }
-                else
-                {
-                    _state.Events.Add(new CombatEvent(
-                        _state.Tick, "ForceUseBlockedByFreeze", scheduled.Card.InstanceId));
+                    if (scheduled.AllowDisabled)
+                    {
+                        _forceActiveCards.Add(scheduled.Card);
+                    }
+                    try
+                    {
+                        FireCardCore(
+                            scheduled.Card,
+                            force: true,
+                            scheduleReadySignals: true,
+                            bypassOwnEffectScheduling: true);
+                    }
+                    finally
+                    {
+                        _forceActiveCards.Remove(scheduled.Card);
+                    }
                 }
             }
         }
@@ -609,7 +629,7 @@ public sealed class CombatRuleRuntime
                 CombatEvent annotatedEvent = directEvent with
                 {
                     EffectId = effect.Id,
-                    ActionType = result.ActionType,
+                    ActionType = directEvent.ActionType ?? result.ActionType,
                     ExecutionContextId = executionContextId,
                     TriggerSourceId = triggerSource?.InstanceId,
                     VfxOverrideKey = effect.VfxOverrideKey,
@@ -625,11 +645,12 @@ public sealed class CombatRuleRuntime
                 _state.Events.Add(new CombatEvent(
                     _state.Tick, "UnsupportedAction:" + result.ActionType, card.InstanceId));
             }
+            DispatchDisableRequests(firstNewEvent, card);
             DispatchDestroyRequests(firstNewEvent, card);
             _auras.Recompute();
             DispatchNewAttributeEvents(firstNewEvent);
             DispatchNewPlayerAttributeEvents(firstNewEvent);
-            DispatchForceUseEvents(firstNewEvent);
+            DispatchForceUseEvents(firstNewEvent, Priority(effect) >= 500);
             DispatchLifecycleEvents(firstNewEvent, card);
             if (UnprocessedEvents(firstNewEvent).Any(value => value.Kind == "OverHeal"))
             {
@@ -878,7 +899,7 @@ public sealed class CombatRuleRuntime
             attributeDelta: checked(current - previous));
     }
 
-    private void DispatchForceUseEvents(int firstEvent)
+    private void DispatchForceUseEvents(int firstEvent, bool immediate)
     {
         int endEvent = _state.Events.Count;
         for (int eventIndex = firstEvent; eventIndex < endEvent; eventIndex++)
@@ -901,8 +922,66 @@ public sealed class CombatRuleRuntime
             if (target is not null)
             {
                 _state.ScheduledForceUses.Add(new ScheduledForceUse(
-                    target, checked(_state.Tick + 5)));
+                    target, immediate ? _state.Tick : checked(_state.Tick + 1),
+                    _pendingDisableTargets.Contains(target)));
             }
+        }
+    }
+
+    private void DispatchDisableRequests(int firstEvent, CombatCardState performer)
+    {
+        foreach (CombatEvent combatEvent in UnprocessedEvents(firstEvent))
+        {
+            if (combatEvent.Kind != "CardDisableRequested" || combatEvent.TargetId is null)
+            {
+                continue;
+            }
+            CombatCardState? target = _state.Combatants.SelectMany(value => value.Cards)
+                .FirstOrDefault(card => card.InstanceId == combatEvent.TargetId);
+            if (target is null || target.IsDisabled || target.IsDestroyed)
+            {
+                continue;
+            }
+
+            string originalTemplateId = target.Definition.TemplateId;
+            _pendingDisableTargets.Add(target);
+            try
+            {
+                RunNestedDispatch(() => DispatchCardLifecycleTrigger(
+                    "TTriggerOnBeforeCardDestroyed", performer, target));
+            }
+            finally
+            {
+                _pendingDisableTargets.Remove(target);
+            }
+            if (!string.Equals(originalTemplateId, target.Definition.TemplateId,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                _state.Events.Add(new CombatEvent(
+                    _state.Tick, "CardDisableReplaced", target.InstanceId,
+                    SourceId: performer.InstanceId));
+                continue;
+            }
+            if (target.Attributes.GetValueOrDefault("DestroyImmunity") > 0)
+            {
+                _state.Events.Add(new CombatEvent(
+                    _state.Tick, "CardDisableBlocked", target.InstanceId,
+                    SourceId: performer.InstanceId));
+                continue;
+            }
+
+            target.IsDisabled = true;
+            _state.Events.Add(new CombatEvent(
+                _state.Tick, "CardDisabled", target.InstanceId,
+                SourceId: performer.InstanceId,
+                EffectId: combatEvent.EffectId,
+                ActionType: combatEvent.ActionType,
+                ExecutionContextId: combatEvent.ExecutionContextId,
+                TriggerSourceId: combatEvent.TriggerSourceId,
+                VfxOverrideKey: combatEvent.VfxOverrideKey));
+            _auras.Recompute();
+            RunNestedDispatch(() => DispatchCardPerformedTrigger(
+                "TTriggerOnCardPerformedDestruction", performer, target));
         }
     }
 
@@ -1083,11 +1162,17 @@ public sealed class CombatRuleRuntime
 
     private IEnumerable<CombatCardState> ActiveCards() => _state.Combatants
         .SelectMany(value => value.Cards)
-        .Where(card => !card.IsDisabled && !card.IsDestroyed);
+        .Where(card => (!card.IsDisabled || _forceActiveCards.Contains(card)) &&
+            !card.IsDestroyed);
 
     private static IEnumerable<MaterializedEffectDefinition> ActiveEffects(
         CombatCardState card) => card.Definition.Effects
-        .Where(effect => CombatEffectActivation.IsActive(effect, card));
+        .Where(effect => CombatEffectActivation.IsActive(effect, card) &&
+            !IsUseMarkerEffect(effect));
+
+    private static bool IsUseMarkerEffect(MaterializedEffectDefinition effect) =>
+        string.Equals(effect.Definition.GetStringOrNull("InternalName"),
+            "Dummy Ability to ensure item is used", StringComparison.Ordinal);
 
     private static bool HasTrigger(MaterializedEffectDefinition effect, string triggerType) =>
         TryGetMatchingTrigger(effect, triggerType, out _);
