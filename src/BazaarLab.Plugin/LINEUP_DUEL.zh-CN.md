@@ -18,13 +18,13 @@ v1.0.6 起，新导出的阵容码使用完整卡表 SHA-256 作为规则集标�
 ## 任意状态导出规则
 
 - 普通流程：直接读取当前玩家阵容；拖拽、移动和服务器响应期间暂不取样。
-- 阵容连续稳定 0.5 秒后：写入 `last-stable-lineup.json` 和
-  `last-stable-lineup.code.txt`。
+- 阵容连续稳定 0.5 秒后：写入 `state/last-stable-lineup.json` 和
+  `state/last-stable-lineup.code.txt`。
 - 战斗中：优先导出战斗开始时冻结的玩家阵容，不导出被战斗临时效果污染的状态。
 - 主菜单、加载界面或当前 Run 不可用时：导出上一次持久化的稳定阵容。
 - `OPPONENT -> B`：导出最近一次开战时冻结的对方阵容。
 
-缓存位于 `BepInEx/config/BazaarLab/`。因此退出一局或重启游戏后，
+缓存位于 `BepInEx/config/BazaarLab/state/`。因此退出一局或重启游戏后，
 仍能导出最近一次稳定阵容。
 
 标题栏的“打开历史目录”按钮在展开和最小化状态下都常驻可用，会直接打开

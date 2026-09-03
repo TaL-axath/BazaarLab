@@ -53,6 +53,7 @@ $arguments = @(
 $arguments += $references | ForEach-Object { '/reference:' + $_ }
 $arguments += @(
     (Join-Path $projectDirectory 'Plugin.cs'),
+    (Join-Path $projectDirectory 'ArtifactStorage.cs'),
     (Join-Path $projectDirectory 'CatalogManager.cs'),
     (Join-Path $projectDirectory 'PlacementControls.cs'),
     (Join-Path $projectDirectory 'MonsterCombatControls.cs'),

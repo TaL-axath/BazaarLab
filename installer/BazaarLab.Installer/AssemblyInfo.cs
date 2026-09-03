@@ -4,5 +4,5 @@ using System.Reflection;
 [assembly: AssemblyProduct("BazaarLab")]
 [assembly: AssemblyDescription("BazaarLab Windows installer")]
 [assembly: AssemblyCompany("BazaarLab")]
-[assembly: AssemblyVersion("1.0.7.0")]
-[assembly: AssemblyFileVersion("1.0.7.0")]
+[assembly: AssemblyVersion("1.0.8.0")]
+[assembly: AssemblyFileVersion("1.0.8.0")]

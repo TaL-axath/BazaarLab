@@ -63,7 +63,7 @@ public sealed partial class Plugin
     private void InitializeLineupDuelControls()
     {
         _catalogFingerprint = GetCatalogFingerprint();
-        string cache = Path.Combine(_outputDirectory, "last-stable-lineup.json");
+        string cache = StateFile("last-stable-lineup.json");
         if (File.Exists(cache))
         {
             try

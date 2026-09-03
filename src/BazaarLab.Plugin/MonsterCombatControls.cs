@@ -16,6 +16,7 @@ public sealed partial class Plugin
 {
     private Process? _monsterProcess;
     private StringBuilder? _monsterProcessLog;
+    private string? _monsterInputPath;
     private string? _monsterResultPath;
     private string? _monsterInputPayload;
     private MonsterPredictionDto? _monsterResult;
@@ -25,6 +26,22 @@ public sealed partial class Plugin
     private float _monsterPayloadChangedAt;
     private Guid? _monsterObservedEncounter;
     private bool _monsterCombatSuppressed;
+    private MonsterPredictionAudit? _pendingMonsterPrediction;
+    private readonly Dictionary<string, MonsterPredictionAudit> _monsterPredictionsByCapture =
+        new Dictionary<string, MonsterPredictionAudit>(StringComparer.Ordinal);
+    private readonly Dictionary<string, MonsterPredictionAudit> _encounterPredictionsByEncounter =
+        new Dictionary<string, MonsterPredictionAudit>(StringComparer.OrdinalIgnoreCase);
+
+    private sealed class MonsterPredictionAudit
+    {
+        public string EncounterId { get; set; } = string.Empty;
+        public string Predicted { get; set; } = string.Empty;
+        public int PlayerWins { get; set; }
+        public int OpponentWins { get; set; }
+        public int Draws { get; set; }
+        public string InputJson { get; set; } = string.Empty;
+        public string ResultJson { get; set; } = string.Empty;
+    }
 
     private bool IsMonsterCalculating => _monsterProcess is not null;
 
@@ -50,6 +67,7 @@ public sealed partial class Plugin
         _monsterProcess.Dispose();
         _monsterProcess = null;
         _monsterProcessLog = null;
+        FinishMonsterArtifacts(false, "plugin shutdown", null);
     }
 
     private void UpdateMonsterCombatControls()
@@ -72,6 +90,7 @@ public sealed partial class Plugin
             _monsterCandidatePayload = null;
             _monsterCompletedPayload = null;
             _monsterResult = null;
+            _pendingMonsterPrediction = null;
             _monsterPayloadChangedAt = Time.realtimeSinceStartup;
         }
         bool ready = IsLiveMonsterEncounterReady();
@@ -83,6 +102,7 @@ public sealed partial class Plugin
                 StringComparison.Ordinal))
         {
             _monsterCandidatePayload = _lastLiveInventoryPayload;
+            _pendingMonsterPrediction = null;
             _monsterPayloadChangedAt = Time.realtimeSinceStartup;
         }
         if (!IsMonsterCalculating && !IsSearching && !IsMoving && !IsBaselineCalculating &&
@@ -127,7 +147,7 @@ public sealed partial class Plugin
         process.Dispose();
         _monsterProcess = null;
         _monsterProcessLog = null;
-        _monsterResultPath = null;
+        FinishMonsterArtifacts(false, "combat started", null);
         _monsterStatus = "战斗中，已暂停野怪计算";
     }
 
@@ -213,7 +233,7 @@ public sealed partial class Plugin
             CaptureLiveInventory(DateTime.UtcNow);
             string core = GetRuntimeFile("BazaarLab.Combat.dll");
             string catalog = GetCatalogFile();
-            string liveInput = Path.Combine(_outputDirectory, "live-inventory.json");
+            string liveInput = StateFile("live-inventory.json");
             if (!File.Exists(core) || !File.Exists(catalog) || !File.Exists(liveInput))
             {
                 SetMonsterStatus("Combat runtime, catalog, or live snapshot is missing");
@@ -223,10 +243,10 @@ public sealed partial class Plugin
             _monsterResult = null;
             _monsterInputPayload = _lastLiveInventoryPayload;
             string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff");
-            string input = Path.Combine(_outputDirectory,
+            _monsterInputPath = TemporaryArtifactFile("monster",
                 "monster-input-" + stamp + ".json");
-            File.Copy(liveInput, input, overwrite: false);
-            _monsterResultPath = Path.Combine(_outputDirectory,
+            File.Copy(liveInput, _monsterInputPath, overwrite: false);
+            _monsterResultPath = TemporaryArtifactFile("monster",
                 "monster-result-" + stamp + ".json");
             string dotnetExecutable = Path.Combine(Environment.GetFolderPath(
                 Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
@@ -236,7 +256,8 @@ public sealed partial class Plugin
             {
                 FileName = dotnetExecutable,
                 Arguments = Quote(core) + " predict-bpp " + Quote(catalog) + " " +
-                    Quote(input) + " 20260831 50 2400 " + Quote(_monsterResultPath),
+                    Quote(_monsterInputPath) + " 20260831 50 2400 " +
+                    Quote(_monsterResultPath),
                 WorkingDirectory = Path.GetDirectoryName(core) ?? Paths.GameRootPath,
                 UseShellExecute = false,
                 CreateNoWindow = true,
@@ -256,6 +277,8 @@ public sealed partial class Plugin
             {
                 process.Dispose();
                 SetMonsterStatus("Failed to start local combat process");
+                _monsterCompletedPayload = _monsterInputPayload;
+                FinishMonsterArtifacts(true, _monsterStatus, null);
                 return;
             }
             process.BeginOutputReadLine();
@@ -268,6 +291,8 @@ public sealed partial class Plugin
         catch (Exception exception)
         {
             SetMonsterStatus("Calculation failed: " + exception.Message);
+            _monsterCompletedPayload = _monsterInputPayload;
+            FinishMonsterArtifacts(true, _monsterStatus, exception.ToString());
         }
     }
 
@@ -300,24 +325,54 @@ public sealed partial class Plugin
                 Logger.LogWarning("monster-combat process failed (exit " + exitCode + "):\n" + log);
                 SetMonsterStatus("Combat process failed (exit " + exitCode + "): " +
                     LastLine(log));
+                _monsterCompletedPayload = _monsterInputPayload;
+                FinishMonsterArtifacts(true, _monsterStatus, log);
                 return;
             }
+            string resultJson = File.ReadAllText(_monsterResultPath);
             _monsterResult = JsonSerializer.Deserialize<MonsterPredictionDto>(
-                File.ReadAllText(_monsterResultPath), new JsonSerializerOptions
+                resultJson, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true,
                 });
             if (_monsterResult is null)
             {
                 SetMonsterStatus("Combat result was empty");
+                _monsterCompletedPayload = _monsterInputPayload;
+                FinishMonsterArtifacts(true, _monsterStatus, log);
                 return;
             }
+            if (!_monsterResult.PredictionReady)
+            {
+                SetMonsterStatus("UNRELIABLE: " +
+                    (_monsterResult.ValidationErrors?.FirstOrDefault() ??
+                     "snapshot is incomplete"));
+                _monsterCompletedPayload = _monsterInputPayload;
+                FinishMonsterArtifacts(true, _monsterStatus, log);
+                return;
+            }
+            string inputJson = _monsterInputPath is not null && File.Exists(_monsterInputPath)
+                ? File.ReadAllText(_monsterInputPath) : string.Empty;
             bool stale = !string.Equals(_monsterInputPayload, _lastLiveInventoryPayload,
                 StringComparison.Ordinal);
+            if (!stale)
+            {
+                _pendingMonsterPrediction = new MonsterPredictionAudit
+                {
+                    EncounterId = Data.CurrentEncounterId?.ToString("D") ?? string.Empty,
+                    Predicted = NormalizePredictedOutcome(_monsterResult),
+                    PlayerWins = _monsterResult.PlayerWins,
+                    OpponentWins = _monsterResult.OpponentWins,
+                    Draws = _monsterResult.Draws,
+                    InputJson = inputJson,
+                    ResultJson = resultJson,
+                };
+            }
             _monsterCompletedPayload = _monsterInputPayload;
             SetMonsterStatus($"完成：{_monsterResult.Samples} 场，" +
                 $"胜率 {_monsterResult.PlayerWinRate:P0}" +
                 (stale ? "; state changed" : string.Empty));
+            FinishMonsterArtifacts(false, "success", null);
         }
         catch (Exception exception)
         {
@@ -325,7 +380,71 @@ public sealed partial class Plugin
             _monsterProcess = null;
             _monsterProcessLog = null;
             SetMonsterStatus("Cannot load combat result: " + exception.Message);
+            _monsterCompletedPayload = _monsterInputPayload;
+            FinishMonsterArtifacts(true, _monsterStatus, exception.ToString());
         }
+    }
+
+    private void FinishMonsterArtifacts(bool preserve, string reason, string? log)
+    {
+        if (preserve)
+            PreserveArtifacts("monster", reason, log, _monsterInputPath, _monsterResultPath);
+        else
+            DeleteArtifacts(_monsterInputPath, _monsterResultPath);
+        _monsterInputPath = null;
+        _monsterResultPath = null;
+    }
+
+    private static string NormalizePredictedOutcome(MonsterPredictionDto result)
+    {
+        if (!string.IsNullOrWhiteSpace(result.Predicted))
+            return result.Predicted!.Trim().ToLowerInvariant();
+        if (result.PlayerWins > result.OpponentWins) return "win";
+        if (result.OpponentWins > result.PlayerWins) return "loss";
+        return "draw";
+    }
+
+    private void AttachMonsterPredictionToCapture(string captureId, string opponentHero)
+    {
+        if (!string.Equals(opponentHero, "Common", StringComparison.OrdinalIgnoreCase))
+            return;
+        MonsterPredictionAudit? prediction = _pendingMonsterPrediction;
+        string encounterId = Data.CurrentEncounterId?.ToString("D") ?? string.Empty;
+        if (prediction is null && !string.IsNullOrEmpty(encounterId))
+            _encounterPredictionsByEncounter.TryGetValue(encounterId, out prediction);
+        if (prediction is null) return;
+        _monsterPredictionsByCapture[captureId] = prediction;
+        _pendingMonsterPrediction = null;
+        if (!string.IsNullOrEmpty(encounterId))
+            _encounterPredictionsByEncounter.Remove(encounterId);
+    }
+
+    private void AuditMonsterPrediction(string captureId, string actualWinner)
+    {
+        if (!_monsterPredictionsByCapture.Remove(captureId,
+                out MonsterPredictionAudit? prediction))
+            return;
+        string actual = actualWinner.Equals("Player", StringComparison.OrdinalIgnoreCase)
+            ? "win" : actualWinner.Equals("Opponent", StringComparison.OrdinalIgnoreCase)
+                ? "loss" : "draw";
+        if (string.Equals(prediction.Predicted, actual, StringComparison.OrdinalIgnoreCase))
+            return;
+        PreserveArtifactText(Path.Combine("monster", "mismatches"),
+            "monster prediction did not match the official combat result",
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["monster-input.json"] = prediction.InputJson,
+                ["monster-result.json"] = prediction.ResultJson,
+            }, new
+            {
+                capture_id = captureId,
+                encounter_id = prediction.EncounterId,
+                predicted = prediction.Predicted,
+                actual,
+                prediction.PlayerWins,
+                prediction.OpponentWins,
+                prediction.Draws,
+            });
     }
 
     private void SetMonsterStatus(string status)

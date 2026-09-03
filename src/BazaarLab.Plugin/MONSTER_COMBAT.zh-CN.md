@@ -1,4 +1,4 @@
-# 野怪战斗计算 v1.0.7
+# 野怪战斗计算 v1.0.8
 
 在游戏选中野怪、野怪棋盘加载完成且战斗尚未开始时，系统会在野怪棋盘稳定 1 秒后
 自动计算，并把胜率悬浮显示在野怪头像上方。
@@ -22,7 +22,11 @@ run index，单场最多模拟 2400 tick。
 如果计算完成前玩家、野怪、时间或遭遇发生变化，结果会标记为正在更新。战斗开始后
 计算自动停止，因为此时结果已不再能用于战前决策。
 
-输出位于 `BepInEx/config/BazaarLab/`：
+运行中的输入和结果位于 `BepInEx/config/BazaarLab/temp/monster/`：
 
 - `monster-input-*.json`：不可变计算输入；
 - `monster-result-*.json`：完整预测结果。
+
+可靠结果读入内存后会立即删除临时文件。失败或 `UNRELIABLE` 样本移动到
+`diagnostics/monster/`。可靠预测在内存中等待对应的官方战斗结果；预测胜负与实战
+不一致时，输入、预测结果和实际胜负会写入 `diagnostics/monster/mismatches/`。

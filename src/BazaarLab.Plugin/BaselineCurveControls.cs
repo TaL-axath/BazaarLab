@@ -16,6 +16,7 @@ public sealed partial class Plugin
 {
     private Process? _baselineProcess;
     private StringBuilder? _baselineProcessLog;
+    private string? _baselineInputPath;
     private string? _baselineResultPath;
     private string? _baselineCandidateFingerprint;
     private string? _baselineRunningFingerprint;
@@ -59,6 +60,7 @@ public sealed partial class Plugin
             _baselineProcess = null;
         }
         _baselineProcessLog = null;
+        FinishBaselineArtifacts(false, "plugin shutdown", null);
         if (_curveTexture is not null)
         {
             Destroy(_curveTexture);
@@ -134,7 +136,7 @@ public sealed partial class Plugin
         _baselineProcess = null;
         _baselineProcessLog = null;
         _baselineRunningFingerprint = null;
-        _baselineResultPath = null;
+        FinishBaselineArtifacts(false, "combat started", null);
     }
 
     private string? ComputePlayerBoardFingerprint()
@@ -192,22 +194,24 @@ public sealed partial class Plugin
             _baselineStatus = catalogReason;
             return;
         }
+        _baselineRunningFingerprint = fingerprint;
         try
         {
             CaptureLiveInventory(DateTime.UtcNow);
             string gameRoot = Paths.GameRootPath;
             string runtime = GetRuntimeFile("BazaarLab.BaselineMetrics.dll");
             string catalog = GetCatalogFile();
-            string liveInput = Path.Combine(_outputDirectory, "live-inventory.json");
+            string liveInput = StateFile("live-inventory.json");
             if (!File.Exists(runtime) || !File.Exists(catalog) || !File.Exists(liveInput))
             {
                 _baselineStatus = "缺少曲线运行库、卡牌目录或阵容快照";
                 return;
             }
             string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff");
-            string input = Path.Combine(_outputDirectory, "baseline-input-" + stamp + ".json");
-            File.Copy(liveInput, input, overwrite: false);
-            _baselineResultPath = Path.Combine(_outputDirectory,
+            _baselineInputPath = TemporaryArtifactFile("baseline",
+                "baseline-input-" + stamp + ".json");
+            File.Copy(liveInput, _baselineInputPath, overwrite: false);
+            _baselineResultPath = TemporaryArtifactFile("baseline",
                 "baseline-result-" + stamp + ".json");
             string dotnetExecutable = Path.Combine(Environment.GetFolderPath(
                 Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
@@ -216,7 +220,8 @@ public sealed partial class Plugin
             var start = new ProcessStartInfo
             {
                 FileName = dotnetExecutable,
-                Arguments = Quote(runtime) + " " + Quote(catalog) + " " + Quote(input) + " " +
+                Arguments = Quote(runtime) + " " + Quote(catalog) + " " +
+                    Quote(_baselineInputPath) + " " +
                     Quote(_baselineResultPath) + " 20260831 7 600 20",
                 WorkingDirectory = Path.GetDirectoryName(runtime) ?? gameRoot,
                 UseShellExecute = false,
@@ -237,6 +242,7 @@ public sealed partial class Plugin
             {
                 process.Dispose();
                 _baselineStatus = "无法启动曲线计算进程";
+                FinishBaselineArtifacts(true, _baselineStatus, null);
                 return;
             }
             process.BeginOutputReadLine();
@@ -249,7 +255,8 @@ public sealed partial class Plugin
         catch (Exception exception)
         {
             _baselineStatus = "曲线计算失败：" + exception.Message;
-            _baselineRunningFingerprint = null;
+            _baselineRunningFingerprint = fingerprint;
+            FinishBaselineArtifacts(true, _baselineStatus, exception.ToString());
         }
     }
 
@@ -276,7 +283,7 @@ public sealed partial class Plugin
                 !File.Exists(_baselineResultPath))
             {
                 _baselineStatus = "曲线进程失败：" + LastLine(log);
-                _baselineRunningFingerprint = null;
+                FinishBaselineArtifacts(true, _baselineStatus, log);
                 return;
             }
             _baselineResult = JsonSerializer.Deserialize<BaselineReportDto>(
@@ -287,22 +294,33 @@ public sealed partial class Plugin
             if (_baselineResult is null)
             {
                 _baselineStatus = "曲线结果为空";
-                _baselineRunningFingerprint = null;
+                FinishBaselineArtifacts(true, _baselineStatus, log);
                 return;
             }
             bool stale = !string.Equals(_baselineCandidateFingerprint,
                 _baselineRunningFingerprint, StringComparison.Ordinal);
             _baselineStatus = stale ? "布阵区已变化，正在重新计算……" :
                 $"已更新：{_baselineResult.Samples} 个样本 / {_baselineResult.DurationSeconds:0} 秒";
+            FinishBaselineArtifacts(false, "success", null);
         }
         catch (Exception exception)
         {
             process.Dispose();
             _baselineProcess = null;
             _baselineProcessLog = null;
-            _baselineRunningFingerprint = null;
             _baselineStatus = "无法读取曲线结果：" + exception.Message;
+            FinishBaselineArtifacts(true, _baselineStatus, exception.ToString());
         }
+    }
+
+    private void FinishBaselineArtifacts(bool preserve, string reason, string? log)
+    {
+        if (preserve)
+            PreserveArtifacts("baseline", reason, log, _baselineInputPath, _baselineResultPath);
+        else
+            DeleteArtifacts(_baselineInputPath, _baselineResultPath);
+        _baselineInputPath = null;
+        _baselineResultPath = null;
     }
 
     private void DrawBaselineCurveControls()

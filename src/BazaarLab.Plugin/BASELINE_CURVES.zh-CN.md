@@ -19,5 +19,6 @@
 物品位置、物品属性、品质、附魔、技能或玩家战斗属性变化都会使旧曲线过期并触发自动
 重算。背包中未上阵物品不会触发，因为它们不属于当前阵容。
 
-不可变输入与结果保存在 `BepInEx/config/BazaarLab/` 的
-`baseline-input-*.json` 和 `baseline-result-*.json`。
+计算中的不可变输入与结果暂存在 `BepInEx/config/BazaarLab/temp/baseline/`。
+成功读入曲线后立即删除；进程失败、结果为空或反序列化异常时，整组文件和错误信息
+会移动到 `diagnostics/baseline/`，用于复现和排错。

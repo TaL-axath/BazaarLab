@@ -27,7 +27,7 @@ dotnet src/BazaarLab.PlacementSearch/bin/Release/net8.0/BazaarLab.PlacementSearc
   options.json
 ```
 
-`BepInEx/config/BazaarLab/live-inventory.json`
+`BepInEx/config/BazaarLab/state/live-inventory.json`
 
 该文件包含玩家实时 `Hand`、`Stash` 和 `Skills`。常规摆位使用 10 秒无限血白板
 目标，不要求对手棋盘可见。这里的 10 秒是单场评分时间轴，不是搜索超时。

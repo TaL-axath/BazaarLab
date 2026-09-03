@@ -18,6 +18,7 @@ namespace BazaarLab.Plugin;
 public sealed partial class Plugin
 {
     private Process? _placementProcess;
+    private string? _placementInputPath;
     private string? _placementResultPath;
     private string? _placementOptionsPath;
     private string? _placementInputFingerprint;
@@ -71,6 +72,7 @@ public sealed partial class Plugin
             _placementProcess.Dispose();
             _placementProcess = null;
         }
+        FinishPlacementArtifacts(false, "plugin shutdown", null);
         StopMovePlan();
     }
 
@@ -79,17 +81,18 @@ public sealed partial class Plugin
         if (_placementProcess is not null &&
             Time.realtimeSinceStartup - _placementStartedAt >= 15f)
         {
-            CancelPlacementSearch("摆位规划超过 15 秒，已自动中断；请减少候选物品后重试");
+            CancelPlacementSearch("摆位规划超过 15 秒，已自动中断；请减少候选物品后重试",
+                preserveArtifacts: true);
         }
         else if (_placementProcess is not null && IsCombatOrReplayActive())
         {
-            CancelPlacementSearch("已进入战斗，摆位规划已中断");
+            CancelPlacementSearch("已进入战斗，摆位规划已中断", preserveArtifacts: false);
         }
         PollPlacementSearch();
         UpdateMovePlan();
     }
 
-    private void CancelPlacementSearch(string status)
+    private void CancelPlacementSearch(string status, bool preserveArtifacts)
     {
         Process? process = _placementProcess;
         if (process is null) return;
@@ -104,8 +107,8 @@ public sealed partial class Plugin
         process.Dispose();
         _placementProcess = null;
         _placementProcessLogBuilder = null;
-        _placementResultPath = null;
         _placementResult = null;
+        FinishPlacementArtifacts(preserveArtifacts, status, _placementProcessLog);
         lock (_placementProgressLock)
         {
             _placementProgress = 0f;
@@ -244,23 +247,27 @@ public sealed partial class Plugin
             string gameRoot = Paths.GameRootPath;
             string runtime = GetRuntimeFile("BazaarLab.PlacementSearch.dll");
             string catalog = GetCatalogFile();
-            string input = Path.Combine(_outputDirectory, "live-inventory.json");
-            if (!File.Exists(runtime) || !File.Exists(catalog) || !File.Exists(input))
+            string liveInput = StateFile("live-inventory.json");
+            if (!File.Exists(runtime) || !File.Exists(catalog) || !File.Exists(liveInput))
             {
                 SetPlacementStatus("缺少摆位运行库、卡牌目录或实时快照");
                 return;
             }
 
             string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff");
-            _placementResultPath = Path.Combine(_outputDirectory,
+            _placementInputPath = TemporaryArtifactFile("placement",
+                "placement-input-" + stamp + ".json");
+            File.Copy(liveInput, _placementInputPath, overwrite: false);
+            _placementResultPath = TemporaryArtifactFile("placement",
                 "placement-result-" + stamp + ".json");
             if (!TryGetContiguousUnlockedBoardRange(current.Unlocked,
                     out int boardMinimum, out int boardMaximum, out error))
             {
                 SetPlacementStatus("无法确定可用棋盘范围：" + error);
+                FinishPlacementArtifacts(true, _placementStatus, null);
                 return;
             }
-            _placementOptionsPath = Path.Combine(_outputDirectory,
+            _placementOptionsPath = TemporaryArtifactFile("placement",
                 "placement-options-" + stamp + ".json");
             File.WriteAllText(_placementOptionsPath, JsonSerializer.Serialize(new
             {
@@ -282,7 +289,8 @@ public sealed partial class Plugin
             var start = new ProcessStartInfo
             {
                 FileName = dotnetExecutable,
-                Arguments = Quote(runtime) + " " + Quote(catalog) + " " + Quote(input) + " " +
+                Arguments = Quote(runtime) + " " + Quote(catalog) + " " +
+                    Quote(_placementInputPath) + " " +
                     Quote(_placementResultPath) + " " + Quote(_placementOptionsPath),
                 WorkingDirectory = Path.GetDirectoryName(runtime) ?? gameRoot,
                 UseShellExecute = false,
@@ -312,6 +320,7 @@ public sealed partial class Plugin
             {
                 process.Dispose();
                 SetPlacementStatus("无法启动摆位搜索进程");
+                FinishPlacementArtifacts(true, _placementStatus, null);
                 return;
             }
             process.BeginOutputReadLine();
@@ -324,6 +333,7 @@ public sealed partial class Plugin
         catch (Exception exception)
         {
             SetPlacementStatus("搜索失败：" + exception.Message);
+            FinishPlacementArtifacts(true, _placementStatus, exception.ToString());
         }
     }
 
@@ -359,6 +369,7 @@ public sealed partial class Plugin
             {
                 SetPlacementStatus("摆位进程失败（退出码 " + exitCode + "）：" +
                     LastLine(_placementProcessLog));
+                FinishPlacementArtifacts(true, _placementStatus, _placementProcessLog);
                 return;
             }
             _placementResult = JsonSerializer.Deserialize<PlacementResultDto>(
@@ -374,6 +385,7 @@ public sealed partial class Plugin
             }
             SetPlacementStatus(count == 0 ? "没有有效推荐方案" :
                 $"推荐已就绪：{count} 件上阵物品；确认后点击“应用”");
+            FinishPlacementArtifacts(false, "success", null);
         }
         catch (Exception exception)
         {
@@ -381,7 +393,20 @@ public sealed partial class Plugin
             _placementProcess = null;
             _placementProcessLogBuilder = null;
             SetPlacementStatus("无法读取摆位结果：" + exception.Message);
+            FinishPlacementArtifacts(true, _placementStatus, exception.ToString());
         }
+    }
+
+    private void FinishPlacementArtifacts(bool preserve, string reason, string? log)
+    {
+        if (preserve)
+            PreserveArtifacts("placement", reason, log, _placementInputPath,
+                _placementOptionsPath, _placementResultPath);
+        else
+            DeleteArtifacts(_placementInputPath, _placementOptionsPath, _placementResultPath);
+        _placementInputPath = null;
+        _placementOptionsPath = null;
+        _placementResultPath = null;
     }
 
     private bool TryHandlePlacementProgress(string line)

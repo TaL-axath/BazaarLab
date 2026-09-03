@@ -22,7 +22,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "com.bazaarlab.plugin";
     public const string PluginName = "BazaarLab";
-    public const string PluginVersion = "1.0.7";
+    public const string PluginVersion = "1.0.8";
 
     private static Plugin? _instance;
     private Harmony? _harmony;
@@ -76,6 +76,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         _outputDirectory = Path.Combine(Paths.ConfigPath, "BazaarLab");
         MigrateLegacyOutputDirectory(_outputDirectory);
         Directory.CreateDirectory(_outputDirectory);
+        InitializeArtifactStorage();
         InitializeCatalogManager();
         InitializePlacementControls();
         InitializeMonsterCombatControls();
@@ -116,6 +117,7 @@ public sealed partial class Plugin : BaseUnityPlugin
     private void Update()
     {
         UpdateCatalogManager();
+        UpdateRunArtifactLifecycle();
         UpdateLineupDuelControls();
         UpdateDecisionTrace();
         UpdatePlacementControls();
@@ -343,10 +345,11 @@ public sealed partial class Plugin : BaseUnityPlugin
         {
             WriteIndented = true,
         });
-        string archivePath = Path.Combine(_outputDirectory, captureId + ".json");
+        string archivePath = Path.Combine(_combatOpeningDirectory, captureId + ".json");
         File.WriteAllText(archivePath, json + Environment.NewLine);
         _captureIdsByMessageId[message.MessageId] = captureId;
         _latestCaptureId = captureId;
+        AttachMonsterPredictionToCapture(captureId, opponentHero);
         PublishLatest(json);
         WriteStatus("captured", captureId, archivePath);
         foreach (string warning in inputWarnings)
@@ -430,9 +433,10 @@ public sealed partial class Plugin : BaseUnityPlugin
             card_attribute_changes = cardAttributes,
             effects,
         };
-        string actualPath = Path.Combine(_outputDirectory, captureId + ".actual.json");
+        string actualPath = Path.Combine(_combatResultDirectory, captureId + ".actual.json");
         File.WriteAllText(actualPath, JsonSerializer.Serialize(document,
             new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+        AuditMonsterPrediction(captureId, message.Data.Winner.ToString());
         WriteStatus("actual-captured", captureId, actualPath);
         Logger.LogInfo($"captured official combat result: {actualPath}");
     }
@@ -487,7 +491,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             game_runtime_version = typeof(Data).Assembly.GetName().Version?.ToString(),
         };
         File.WriteAllText(
-            Path.Combine(_outputDirectory, "status.json"),
+            StateFile("status.json"),
             JsonSerializer.Serialize(status, new JsonSerializerOptions { WriteIndented = true }) +
             Environment.NewLine);
     }
@@ -499,7 +503,12 @@ public sealed partial class Plugin : BaseUnityPlugin
 
     private void PublishAtomic(string fileName, string json)
     {
-        string latestPath = Path.Combine(_outputDirectory, fileName);
+        string latestPath = fileName.IndexOfAny(new[]
+            { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }) >= 0
+            ? Path.Combine(_outputDirectory, fileName)
+            : StateFile(fileName);
+        string? parent = Path.GetDirectoryName(latestPath);
+        if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
         string temporaryPath = latestPath + ".tmp";
         File.WriteAllText(temporaryPath, json + Environment.NewLine);
         if (File.Exists(latestPath))

@@ -40,6 +40,7 @@ public sealed partial class Plugin
     private StringBuilder? _encounterPreviewLog;
     private string? _encounterPreviewRunningId;
     private string? _encounterPreviewRunningFingerprint;
+    private string? _encounterPreviewInputPath;
     private string? _encounterPreviewResultPath;
     private string? _encounterPreviewCandidateFingerprint;
     private string? _encounterPreviewAppliedFingerprint;
@@ -134,6 +135,7 @@ public sealed partial class Plugin
         _encounterPreviewLog = null;
         _encounterPreviewRunningId = null;
         _encounterPreviewRunningFingerprint = null;
+        FinishEncounterPreviewArtifacts(false, "plugin shutdown", null);
         _encounterPreviewQueue.Clear();
         _encounterPreviews.Clear();
     }
@@ -186,7 +188,7 @@ public sealed partial class Plugin
         _encounterPreviewLog = null;
         _encounterPreviewRunningId = null;
         _encounterPreviewRunningFingerprint = null;
-        _encounterPreviewResultPath = null;
+        FinishEncounterPreviewArtifacts(false, "preview cancelled", null);
         _encounterPreviewQueue.Clear();
         _encounterPreviews.Clear();
         _encounterPreviewAppliedFingerprint = null;
@@ -329,11 +331,12 @@ public sealed partial class Plugin
                     continue;
                 }
                 string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff");
-                string input = Path.Combine(_outputDirectory,
+                _encounterPreviewInputPath = TemporaryArtifactFile("encounter-preview",
                     "encounter-preview-input-" + stamp + "-" + SafeFileId(id) + ".json");
-                _encounterPreviewResultPath = Path.Combine(_outputDirectory,
+                _encounterPreviewResultPath = TemporaryArtifactFile("encounter-preview",
                     "encounter-preview-result-" + stamp + "-" + SafeFileId(id) + ".json");
-                File.WriteAllText(input, BuildEncounterPreviewJson(entry) + Environment.NewLine);
+                File.WriteAllText(_encounterPreviewInputPath,
+                    BuildEncounterPreviewJson(entry) + Environment.NewLine);
                 string dotnetExecutable = Path.Combine(Environment.GetFolderPath(
                     Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
                 if (!File.Exists(dotnetExecutable)) dotnetExecutable = "dotnet";
@@ -342,7 +345,7 @@ public sealed partial class Plugin
                 {
                     FileName = dotnetExecutable,
                     Arguments = Quote(core) + " predict-bpp " + Quote(catalog) + " " +
-                        Quote(input) + " 20260831 50 2400 " +
+                        Quote(_encounterPreviewInputPath) + " 20260831 50 2400 " +
                         Quote(_encounterPreviewResultPath),
                     WorkingDirectory = Path.GetDirectoryName(core) ?? gameRoot,
                     UseShellExecute = false,
@@ -363,6 +366,7 @@ public sealed partial class Plugin
                 {
                     process.Dispose();
                     entry.Status = "Start failed";
+                    FinishEncounterPreviewArtifacts(true, entry.Status, null);
                     continue;
                 }
                 process.BeginOutputReadLine();
@@ -377,6 +381,7 @@ public sealed partial class Plugin
             catch (Exception exception)
             {
                 entry.Status = "Error: " + exception.Message;
+                FinishEncounterPreviewArtifacts(true, entry.Status, exception.ToString());
             }
         }
     }
@@ -631,7 +636,7 @@ public sealed partial class Plugin
     }
 
     private string MonsterCalibrationPath() =>
-        Path.Combine(_outputDirectory, "monster-calibrations.json");
+        StateFile("monster-calibrations.json");
 
     private string CurrentMonsterDataFingerprint()
     {
@@ -787,22 +792,59 @@ public sealed partial class Plugin
             _encounterPreviewRunningFingerprint = null;
             if (!string.Equals(runningFingerprint, _encounterPreviewAppliedFingerprint,
                     StringComparison.Ordinal))
+            {
+                FinishEncounterPreviewArtifacts(false, "stale preview", null);
                 return;
+            }
             if (id is null || !_encounterPreviews.TryGetValue(id, out EncounterPreviewEntry? entry))
+            {
+                FinishEncounterPreviewArtifacts(false, "preview no longer visible", null);
                 return;
+            }
             if (exitCode != 0 || string.IsNullOrEmpty(_encounterPreviewResultPath) ||
                 !File.Exists(_encounterPreviewResultPath))
             {
                 Logger.LogWarning("encounter-preview process failed (exit " + exitCode + "):\n" + log);
                 entry.Status = "Failed: " + LastLine(log);
+                FinishEncounterPreviewArtifacts(true, entry.Status, log);
                 return;
             }
+            string resultJson = File.ReadAllText(_encounterPreviewResultPath);
             entry.Result = JsonSerializer.Deserialize<MonsterPredictionDto>(
-                File.ReadAllText(_encounterPreviewResultPath), new JsonSerializerOptions
+                resultJson, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true,
                 });
-            entry.Status = entry.Result is null ? "Empty result" : "Ready";
+            if (entry.Result is null)
+            {
+                entry.Status = "Empty result";
+                FinishEncounterPreviewArtifacts(true, entry.Status, log);
+            }
+            else if (!entry.Result.PredictionReady)
+            {
+                entry.Status = "UNRELIABLE: " +
+                    (entry.Result.ValidationErrors?.FirstOrDefault() ?? "incomplete snapshot");
+                FinishEncounterPreviewArtifacts(true, entry.Status, log);
+            }
+            else
+            {
+                entry.Status = "Ready";
+                string inputJson = _encounterPreviewInputPath is not null &&
+                    File.Exists(_encounterPreviewInputPath)
+                    ? File.ReadAllText(_encounterPreviewInputPath) : string.Empty;
+                _encounterPredictionsByEncounter[entry.TemplateId.ToString("D")] =
+                    new MonsterPredictionAudit
+                    {
+                        EncounterId = entry.TemplateId.ToString("D"),
+                        Predicted = NormalizePredictedOutcome(entry.Result),
+                        PlayerWins = entry.Result.PlayerWins,
+                        OpponentWins = entry.Result.OpponentWins,
+                        Draws = entry.Result.Draws,
+                        InputJson = inputJson,
+                        ResultJson = resultJson,
+                    };
+                FinishEncounterPreviewArtifacts(false, "success", null);
+            }
         }
         catch (Exception exception)
         {
@@ -813,10 +855,27 @@ public sealed partial class Plugin
             _encounterPreviewRunningFingerprint = null;
             if (!string.Equals(runningFingerprint, _encounterPreviewAppliedFingerprint,
                     StringComparison.Ordinal))
+            {
+                FinishEncounterPreviewArtifacts(true, "stale preview failed: " +
+                    exception.Message, exception.ToString());
                 return;
+            }
             if (id is not null && _encounterPreviews.TryGetValue(id, out EncounterPreviewEntry? entry))
                 entry.Status = "Error: " + exception.Message;
+            FinishEncounterPreviewArtifacts(true, "preview result error: " + exception.Message,
+                exception.ToString());
         }
+    }
+
+    private void FinishEncounterPreviewArtifacts(bool preserve, string reason, string? log)
+    {
+        if (preserve)
+            PreserveArtifacts("encounter-preview", reason, log,
+                _encounterPreviewInputPath, _encounterPreviewResultPath);
+        else
+            DeleteArtifacts(_encounterPreviewInputPath, _encounterPreviewResultPath);
+        _encounterPreviewInputPath = null;
+        _encounterPreviewResultPath = null;
     }
 
     private void DrawEncounterPreviewControls()

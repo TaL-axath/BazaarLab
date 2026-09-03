@@ -20,9 +20,9 @@
 6. 搜索范围使用运行时读取到的实际已解锁棋盘槽位，不会再把尚未解锁的
    `Socket_0..9` 当作可用目标。
 
-输出目录：`BepInEx/config/BazaarLab/`。每次计算结果使用带时间戳的
-`placement-result-*.json` 保存，实际棋盘边界同时写入对应的
-`placement-options-*.json`，便于复核。
+搜索中的输入、结果和棋盘边界暂存在
+`BepInEx/config/BazaarLab/temp/placement/`。推荐成功读入内存后立即删除；超时、
+进程失败或结果读取异常时，整组文件和进程日志移动到 `diagnostics/placement/`。
 
 部分执行失败时不会擅自自动回滚，因为服务器已经接受的移动不能可靠地视为数据库事务；
 管线会立即停止并要求重新 `PLAN`。只有整条应用成功且状态未再变化时才开放显式 `UNDO`。

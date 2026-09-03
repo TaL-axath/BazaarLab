@@ -53,7 +53,7 @@ BazaarPlusPlus 和游戏本体。BPP 的官方安装包已经自带所需的 Bep
 
 ## Windows 分享安装包
 
-**[直接下载 BazaarLab v1.0.7 Windows x64 安装包](https://github.com/TaL-axath/BazaarLab/releases/download/v1.0.7/BazaarLab-v1.0.7-Windows-x64.zip)**
+**[直接下载 BazaarLab v1.0.8 Windows x64 安装包](https://github.com/TaL-axath/BazaarLab/releases/download/v1.0.8/BazaarLab-v1.0.8-Windows-x64.zip)**
 
 在已安装游戏、BPP（已自带 BepInEx）和 .NET 8 Runtime 的开发机上运行：
 
@@ -105,3 +105,10 @@ JSONL 卡表，按内容 SHA-256 保存到 `BepInEx/config/BazaarLab/catalogs/`�
 BazaarLab 使用 `bazaarlab-combat-snapshot-v1` 快照格式，并继续只读兼容早期的
 `lookingin-localcombat-bpp-snapshot-v1` 历史快照。升级时会尝试把
 `BepInEx/config/LookingIN.LocalCapture` 迁移至 `BepInEx/config/BazaarLab`。
+
+## 本地文件
+
+实时状态位于 `state/`，正在运行的计算位于 `temp/`，失败、`UNRELIABLE` 和野怪
+实战误判样本位于 `diagnostics/`，正式战斗快照位于 `combat-records/`。计算结果
+成功读入内存后立即删除临时输入和输出；完整目录和自动迁移规则见
+[`LOCAL_STORAGE.zh-CN.md`](src/BazaarLab.Plugin/LOCAL_STORAGE.zh-CN.md)。
