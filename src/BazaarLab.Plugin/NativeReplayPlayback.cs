@@ -54,6 +54,8 @@ public sealed partial class Plugin
                 .OfType<CombatSimEventEffectExecuted>().Count(effect => effect.VfxIndex.HasValue),
             CooldownUpdates = decoded.Data.Frames.Sum(frame => frame.CardUpdates.Values.Count(
                 update => update.Attributes.ContainsKey(ECardAttributeType.Cooldown))),
+            StateUpdates = decoded.Data.Frames.Sum(frame => frame.CardUpdates.Values.Count(
+                update => update.State is not null)),
             decoded.Data.Winner,
             decoded.Data.Loser,
         });
@@ -325,6 +327,28 @@ public sealed partial class Plugin
                 CurrentValue = transition.Current,
             };
         }
+        foreach (NativeCardStateTransitionDto transition in source.CardStates)
+        {
+            if (!Enum.TryParse(transition.Previous, false, out ECardState previous) ||
+                !Enum.TryParse(transition.Current, false, out ECardState current))
+                continue;
+            var id = new InstanceId(transition.CardId);
+            if (!frame.CardUpdates.TryGetValue(id, out CombatSimCardUpdate? update))
+            {
+                update = new CombatSimCardUpdate
+                {
+                    CardInstanceId = id,
+                    Attributes = new Dictionary<ECardAttributeType,
+                        CombatSimCardAttributeUpdate>(),
+                };
+                frame.CardUpdates[id] = update;
+            }
+            update.State = new CombatSimCardStateUpdate
+            {
+                PreviousValue = previous,
+                CurrentValue = current,
+            };
+        }
         int effectIndex = 0;
         foreach (NativeEffectDto effect in source.Effects)
         {
@@ -510,6 +534,7 @@ public sealed partial class Plugin
         public List<NativeHealthTransitionDto> PlayerHealth { get; set; } = new();
         public List<NativeHealthTransitionDto> OpponentHealth { get; set; } = new();
         public List<NativeCardTransitionDto> CardAttributes { get; set; } = new();
+        public List<NativeCardStateTransitionDto> CardStates { get; set; } = new();
         public List<NativeEffectDto> Effects { get; set; } = new();
         public string? Died { get; set; }
     }
@@ -525,6 +550,10 @@ public sealed partial class Plugin
     { public string CardId { get; set; } = string.Empty;
         public string Attribute { get; set; } = string.Empty; public int Previous { get; set; }
         public int Current { get; set; } }
+    private sealed class NativeCardStateTransitionDto
+    { public string CardId { get; set; } = string.Empty;
+        public string Previous { get; set; } = string.Empty;
+        public string Current { get; set; } = string.Empty; }
     private sealed class NativeEffectDto
     { public string Kind { get; set; } = string.Empty; public string? SourceId { get; set; }
         public string? TargetId { get; set; } public string? EffectId { get; set; }

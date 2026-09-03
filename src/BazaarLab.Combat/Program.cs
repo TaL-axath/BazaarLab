@@ -32,6 +32,7 @@ if (args.Length == 7 && string.Equals(
         OpponentTransitions = replay.Frames.Sum(frame =>
             frame.OpponentAttributes.Count + frame.OpponentHealth.Count),
         CardTransitions = replay.Frames.Sum(frame => frame.CardAttributes.Count),
+        CardStateTransitions = replay.Frames.Sum(frame => frame.CardStates.Count),
     }, new JsonSerializerOptions { WriteIndented = true }));
     return;
 }
@@ -1481,7 +1482,7 @@ if (File.Exists(officialCards))
     AssertEqual(98, activationOpponent.Health,
         "active stash item and skill each execute once");
 
-    var lifecycleState = new CombatState();
+    var lifecycleState = new CombatState { Tick = 1 };
     var lifecyclePlayer = new CombatantState { Id = "lifecycle-player", MaxHealth = 100, Health = 100 };
     var lifecycleOpponent = new CombatantState { Id = "lifecycle-opponent", MaxHealth = 100, Health = 100 };
     lifecycleState.Combatants.Add(lifecyclePlayer);
@@ -1511,6 +1512,30 @@ if (File.Exists(officialCards))
         "card-disabled trigger");
     AssertEqual(1, disableDestructionListener.Attributes.GetValueOrDefault("Custom_9"),
         "combat disable emits performed-destruction trigger");
+    using JsonDocument ordinaryTargetDocument = JsonDocument.Parse("""
+        {"$type":"TActionCardCharge","Value":{"$type":"TFixedValue","Value":1000},"Target":{"$type":"TTargetCardSection","TargetSection":"OpponentHand","ExcludeSelf":false,"Conditions":null}}
+        """);
+    var ordinaryTargetContext = new CombatActionContext(
+        lifecycleState, disableSource, new XorShiftCombatRandom(SeedMixer.Mix(1431, 0)));
+    AssertEqual(0, TargetResolver.ResolveCards(
+        ordinaryTargetDocument.RootElement, ordinaryTargetContext).Count,
+        "ordinary section targeting excludes combat-disabled cards");
+    var disabledReplaySimulation = new CombatSimulationResult(
+        0, 0, 0, 1, null, Array.Empty<CombatantSimulationResult>(),
+        lifecycleState.Events.Count,
+        new Dictionary<string, int>(),
+        new Dictionary<string, CombatEventAggregate>(),
+        lifecycleState.Events,
+        lifecycleState.Events,
+        Array.Empty<CombatCardAttributeTransition>(), string.Empty);
+    LocalReplayProjectionResult disabledReplay = LocalReplayProjection.Build(
+        "disabled-replay", disabledReplaySimulation);
+    LocalReplayCardStateTransition disabledState = disabledReplay.Frames.Single()
+        .CardStates.Single(value => value.CardId == repairSource.InstanceId);
+    AssertEqual("Alive", disabledState.Previous,
+        "disabled replay state starts alive");
+    AssertEqual("Disabled", disabledState.Current,
+        "disabled replay state reaches disabled");
     AssertEqual(0, lifecycleRules.FireCard(repairSource), "disabled card cannot fire");
     repairSource.IsDisabled = false;
     disableSource.IsDisabled = true;

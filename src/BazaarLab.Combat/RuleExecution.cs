@@ -1598,6 +1598,14 @@ public static class TargetResolver
         {
             candidates = candidates.Where(card => card.IsDisabled).ToList();
         }
+        else if (type is not ("TTargetCardSelf" or "TTargetCardTriggerSource" or
+            "TTargetCardTriggerTarget"))
+        {
+            // Bazaar represents ordinary in-combat destruction as Disabled.  A
+            // disabled card is no longer a normal board target even though its
+            // entity remains available for Repair and lifecycle references.
+            candidates = candidates.Where(card => !card.IsDisabled).ToList();
+        }
         else if (actionType == "TActionCardDisable")
         {
             candidates = candidates.Where(card => !card.IsDisabled).ToList();

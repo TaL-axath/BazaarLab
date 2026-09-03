@@ -22,7 +22,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "com.bazaarlab.plugin";
     public const string PluginName = "BazaarLab";
-    public const string PluginVersion = "1.0.10";
+    public const string PluginVersion = "1.0.11";
 
     private static Plugin? _instance;
     private Harmony? _harmony;
@@ -398,6 +398,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         var opponentAttributes = new List<object>();
         var healthChanges = new List<object>();
         var cardAttributes = new List<object>();
+        var cardStates = new List<object>();
         var effects = new List<object>();
         for (int frameIndex = 0; frameIndex < message.Data.Frames.Count; frameIndex++)
         {
@@ -409,6 +410,16 @@ public sealed partial class Plugin : BaseUnityPlugin
             foreach (KeyValuePair<BazaarGameShared.Domain.Core.InstanceId,
                 CombatSimCardUpdate> pair in frame.CardUpdates)
             {
+                if (pair.Value.State is not null)
+                {
+                    cardStates.Add(new
+                    {
+                        frame = frameIndex,
+                        card_id = pair.Key.Value,
+                        previous = pair.Value.State.PreviousValue.ToString(),
+                        current = pair.Value.State.CurrentValue.ToString(),
+                    });
+                }
                 foreach (CombatSimCardAttributeUpdate update in pair.Value.Attributes.Values)
                 {
                     cardAttributes.Add(new
@@ -451,6 +462,7 @@ public sealed partial class Plugin : BaseUnityPlugin
             opponent_attribute_changes = opponentAttributes,
             health_changes = healthChanges,
             card_attribute_changes = cardAttributes,
+            card_state_changes = cardStates,
             effects,
         };
         string actualPath = Path.Combine(_combatResultDirectory, captureId + ".actual.json");

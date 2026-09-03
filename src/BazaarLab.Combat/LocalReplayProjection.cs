@@ -15,6 +15,7 @@ public sealed record LocalReplayFrame(
     IReadOnlyList<LocalReplayHealthTransition> PlayerHealth,
     IReadOnlyList<LocalReplayHealthTransition> OpponentHealth,
     IReadOnlyList<LocalReplayCardTransition> CardAttributes,
+    IReadOnlyList<LocalReplayCardStateTransition> CardStates,
     IReadOnlyList<LocalReplayEffect> Effects,
     string? Died);
 
@@ -26,6 +27,9 @@ public sealed record LocalReplayHealthTransition(
 
 public sealed record LocalReplayCardTransition(
     string CardId, string Attribute, int Previous, int Current, string? SourceId);
+
+public sealed record LocalReplayCardStateTransition(
+    string CardId, string Previous, string Current, string? SourceId);
 
 public sealed record LocalReplayEffect(
     string Kind, string? SourceId, string? TargetId, int Amount, bool Critical,
@@ -49,6 +53,7 @@ public static class LocalReplayProjection
             var playerHealth = new List<LocalReplayHealthTransition>();
             var opponentHealth = new List<LocalReplayHealthTransition>();
             var cardAttributes = new List<LocalReplayCardTransition>();
+            var cardStates = new List<LocalReplayCardStateTransition>();
             var effects = new List<LocalReplayEffect>();
             string? died = null;
             bool critical = byTick[tick].Any(value => value.Kind == "CardCrit");
@@ -137,6 +142,16 @@ public static class LocalReplayProjection
                     died = value.TargetId;
                     continue;
                 }
+                if (value.Kind == "CardDisabled" && value.TargetId is not null)
+                {
+                    cardStates.Add(new LocalReplayCardStateTransition(
+                        value.TargetId, "Alive", "Disabled", value.SourceId));
+                }
+                else if (value.Kind == "CardRepaired" && value.TargetId is not null)
+                {
+                    cardStates.Add(new LocalReplayCardStateTransition(
+                        value.TargetId, "Disabled", "Alive", value.SourceId));
+                }
                 if (TryEffectKind(value.Kind, out string? effectKind))
                 {
                     if (value.ExecutionContextId is null)
@@ -149,7 +164,7 @@ public static class LocalReplayProjection
                 died = string.Equals(simulation.WinnerId, "player", StringComparison.Ordinal)
                     ? "opponent" : "player";
             frames.Add(new LocalReplayFrame(tick - 1, playerAttributes, opponentAttributes,
-                playerHealth, opponentHealth, cardAttributes, effects, died));
+                playerHealth, opponentHealth, cardAttributes, cardStates, effects, died));
         }
         return new LocalReplayProjectionResult(battleId, frames.Count, simulation.WinnerId,
             frames, vfxKeys.OrderBy(value => value, StringComparer.Ordinal).ToList(),

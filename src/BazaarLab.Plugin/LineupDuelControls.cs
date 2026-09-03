@@ -579,6 +579,8 @@ public sealed partial class Plugin
                         _lineupDuelTraceEvents += opponentHealth.GetArrayLength();
                     if (frame.TryGetProperty("CardAttributes", out JsonElement cards))
                         _lineupDuelTraceEvents += cards.GetArrayLength();
+                    if (frame.TryGetProperty("CardStates", out JsonElement states))
+                        _lineupDuelTraceEvents += states.GetArrayLength();
                 }
             }
             _lineupDuelPhase = string.Empty;
