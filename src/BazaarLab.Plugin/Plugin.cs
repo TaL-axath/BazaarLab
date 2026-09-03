@@ -22,7 +22,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "com.bazaarlab.plugin";
     public const string PluginName = "BazaarLab";
-    public const string PluginVersion = "1.0.11";
+    public const string PluginVersion = "1.0.12";
 
     private static Plugin? _instance;
     private Harmony? _harmony;
@@ -97,6 +97,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         MethodInfo postfix = AccessTools.Method(typeof(Plugin), nameof(ObserveMessage));
         _harmony = new Harmony(PluginGuid);
         _harmony.Patch(target, postfix: new HarmonyMethod(postfix));
+        InitializeNativeReplayPatches(_harmony);
         InitializeDecisionTrace(_harmony);
         WriteStatus("ready", null, null);
         Logger.LogInfo($"capture bridge ready: {_outputDirectory}");
@@ -112,6 +113,7 @@ public sealed partial class Plugin : BaseUnityPlugin
         DisposeBaselineCurveControls();
         DisposeEncounterPreviewControls();
         DisposeLineupDuelControls();
+        DisposeNativeReplayPatches();
         DisposeFloatingWindowControls();
         DisposeDecisionTrace();
         _harmony?.UnpatchSelf();
@@ -269,6 +271,11 @@ public sealed partial class Plugin : BaseUnityPlugin
             }
             else if (__args[0] is NetMessageCombatSim actual)
             {
+                // Scope the client health-pool correction to BazaarLab's injected
+                // replay.  The next ordinary combat message clears it before any
+                // of that combat's frames are processed, including after a draw.
+                _localReplayHealthPoolFixActive = actual.MessageId?.StartsWith(
+                    "local-lineup-", StringComparison.Ordinal) == true;
                 _instance.TryCaptureActual(actual);
             }
         }

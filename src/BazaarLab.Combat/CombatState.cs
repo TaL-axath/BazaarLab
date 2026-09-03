@@ -225,7 +225,8 @@ public sealed record CombatEvent(
     string? ActionType = null,
     string? ExecutionContextId = null,
     string? TriggerSourceId = null,
-    string? VfxOverrideKey = null);
+    string? VfxOverrideKey = null,
+    bool Critical = false);
 
 public sealed record TimedCardModifier(
     CombatCardState Target,

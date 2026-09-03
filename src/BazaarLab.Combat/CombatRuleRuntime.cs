@@ -626,13 +626,20 @@ public sealed class CombatRuleRuntime
                 CombatEvent directEvent = _state.Events[eventIndex];
                 if (directEvent.ExecutionContextId is not null) continue;
                 bool wasProcessedAsNested = _processedNestedEvents.Remove(directEvent);
+                string directActionType = directEvent.ActionType ?? result.ActionType;
                 CombatEvent annotatedEvent = directEvent with
                 {
                     EffectId = effect.Id,
-                    ActionType = directEvent.ActionType ?? result.ActionType,
+                    ActionType = directActionType,
                     ExecutionContextId = executionContextId,
                     TriggerSourceId = triggerSource?.InstanceId,
                     VfxOverrideKey = effect.VfxOverrideKey,
+                    // The client renders the localized critical prefix from
+                    // CombatSimPlayerHealthAdjustment.IsCrit.  Persist criticality
+                    // on the concrete adjustment-producing event so delayed lanes
+                    // do not have to infer it from a CardCrit event on an earlier tick.
+                    Critical = critical && directEvent.Kind is
+                        "CardDamage" or "Heal" or "Shield",
                 };
                 _state.Events[eventIndex] = annotatedEvent;
                 if (wasProcessedAsNested)

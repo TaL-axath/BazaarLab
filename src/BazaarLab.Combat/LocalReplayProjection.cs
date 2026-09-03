@@ -56,7 +56,6 @@ public static class LocalReplayProjection
             var cardStates = new List<LocalReplayCardStateTransition>();
             var effects = new List<LocalReplayEffect>();
             string? died = null;
-            bool critical = byTick[tick].Any(value => value.Kind == "CardCrit");
             var emittedExecutions = new HashSet<string>(StringComparer.Ordinal);
             var tracedCardAttributes = new HashSet<string>(StringComparer.Ordinal);
             foreach (CombatCardAttributeTransition transition in cardAttributesByTick[tick])
@@ -82,7 +81,7 @@ public static class LocalReplayProjection
                         string kind = TryEffectKind(value.Kind, out string? directKind)
                             ? directKind! : NormalizeActionType(value.ActionType);
                         effects.Add(new LocalReplayEffect(kind, value.SourceId,
-                            value.TargetId, value.Amount, critical, value.EffectId,
+                            value.TargetId, value.Amount, value.Critical, value.EffectId,
                             NormalizeActionType(value.ActionType), value.ExecutionContextId,
                             value.TriggerSourceId, value.VfxOverrideKey));
                         if (!string.IsNullOrWhiteSpace(value.VfxOverrideKey))
@@ -101,7 +100,8 @@ public static class LocalReplayProjection
                             "Health", value.SecondaryAmount, value.Amount,
                             Math.Abs(value.Amount - value.SecondaryAmount),
                             FindHealthKind(byTick[tick], value.TargetId, isDamage, "Health"),
-                            source, IsCritical(byTick[tick], source));
+                            source, IsCriticalHealthAdjustment(
+                                byTick[tick], value.TargetId, source, isDamage, "Health"));
                         Select(value.TargetId, playerHealth, opponentHealth).Add(transition);
                     }
                     else if (attribute == "Shield")
@@ -113,7 +113,8 @@ public static class LocalReplayProjection
                             "Shield", value.SecondaryAmount, value.Amount,
                             Math.Abs(value.Amount - value.SecondaryAmount),
                             FindHealthKind(byTick[tick], value.TargetId, isDamage, "Shield"),
-                            source, IsCritical(byTick[tick], source));
+                            source, IsCriticalHealthAdjustment(
+                                byTick[tick], value.TargetId, source, isDamage, "Shield"));
                         Select(value.TargetId, playerHealth, opponentHealth).Add(transition);
                     }
                     else
@@ -156,7 +157,7 @@ public static class LocalReplayProjection
                 {
                     if (value.ExecutionContextId is null)
                         effects.Add(new LocalReplayEffect(effectKind!, value.SourceId,
-                            value.TargetId, value.Amount, critical, null, null, null,
+                            value.TargetId, value.Amount, value.Critical, null, null, null,
                             null, null));
                 }
             }
@@ -206,9 +207,22 @@ public static class LocalReplayProjection
         };
     }
 
-    private static bool IsCritical(IEnumerable<CombatEvent> frame, string? source) =>
-        source is not null && frame.Any(value => value.Kind == "CardCrit" &&
-            string.Equals(value.SourceId, source, StringComparison.Ordinal));
+    private static bool IsCriticalHealthAdjustment(
+        IEnumerable<CombatEvent> frame,
+        string? target,
+        string? source,
+        bool damage,
+        string pool)
+    {
+        if (source is null) return false;
+        string[] kinds = damage
+            ? new[] { "CardDamage" }
+            : pool == "Shield" ? new[] { "Shield" } : new[] { "Heal" };
+        return frame.Any(value => value.Critical &&
+            string.Equals(value.TargetId, target, StringComparison.Ordinal) &&
+            string.Equals(value.SourceId, source, StringComparison.Ordinal) &&
+            kinds.Contains(value.Kind, StringComparer.Ordinal));
+    }
 
     private static bool TryEffectKind(string kind, out string? projected)
     {

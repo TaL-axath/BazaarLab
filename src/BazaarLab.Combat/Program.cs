@@ -1536,6 +1536,35 @@ if (File.Exists(officialCards))
         "disabled replay state starts alive");
     AssertEqual("Disabled", disabledState.Current,
         "disabled replay state reaches disabled");
+    CombatEvent[] replayHealthEvents =
+    [
+        new CombatEvent(1, "CardDamage", "opponent", 50,
+            SourceId: "critical-card", Critical: true),
+        new CombatEvent(1, "PlayerAttribute:Health", "opponent", 50, 100,
+            "critical-card"),
+        new CombatEvent(2, "Shield", "player", 75,
+            SourceId: "shield-card", Critical: true),
+        new CombatEvent(2, "PlayerAttribute:Shield", "player", 75, 0,
+            "shield-card"),
+    ];
+    var replayHealthSimulation = new CombatSimulationResult(
+        0, 0, 0, 2, null, Array.Empty<CombatantSimulationResult>(),
+        replayHealthEvents.Length,
+        new Dictionary<string, int>(),
+        new Dictionary<string, CombatEventAggregate>(),
+        replayHealthEvents,
+        replayHealthEvents,
+        Array.Empty<CombatCardAttributeTransition>(), string.Empty);
+    LocalReplayProjectionResult replayHealthProjection = LocalReplayProjection.Build(
+        "health-replay", replayHealthSimulation);
+    AssertEqual(true, replayHealthProjection.Frames[0].OpponentHealth.Single().Critical,
+        "delayed critical damage retains native critical marker");
+    LocalReplayHealthTransition projectedShield =
+        replayHealthProjection.Frames[1].PlayerHealth.Single();
+    AssertEqual("Shield", projectedShield.Pool,
+        "shield adjustment retains native shield pool");
+    AssertEqual(true, projectedShield.Critical,
+        "critical shield retains native critical marker");
     AssertEqual(0, lifecycleRules.FireCard(repairSource), "disabled card cannot fire");
     repairSource.IsDisabled = false;
     disableSource.IsDisabled = true;
@@ -2177,6 +2206,9 @@ if (File.Exists(officialCards))
     AssertEqual(1, critRules.FireCard(critAila), "critical effect count");
     AssertEqual(-60, critOpponent.Health, "critical damage multiplier");
     AssertEqual(1, critState.Events.Count(value => value.Kind == "CardCrit"), "critical event count");
+    AssertEqual(1, critState.Events.Count(value =>
+        value.Kind == "CardDamage" && value.Critical),
+        "critical adjustment event retains replay marker");
 
     MaterializedCardDefinition rifle = catalog
         .Get("0591d8b4-2632-4c41-9f73-48896237256d")

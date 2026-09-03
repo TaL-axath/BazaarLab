@@ -5,6 +5,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using BazaarGameClient.Domain.Models;
 using BazaarGameShared;
 using BazaarGameShared.Domain.Core;
 using BazaarGameShared.Domain.Core.Types;
@@ -15,6 +16,7 @@ using BazaarGameShared.Infra.Messages.GameSimEvents;
 using BazaarGameShared.Infra.Messages.Shared;
 using BazaarPlusPlus.Game.PvpBattles;
 using BepInEx;
+using HarmonyLib;
 using MessagePack;
 using MessagePack.Resolvers;
 using TheBazaar;
@@ -23,6 +25,50 @@ namespace BazaarLab.Plugin;
 
 public sealed partial class Plugin
 {
+    private static bool _localReplayHealthPoolFixActive;
+
+    private void InitializeNativeReplayPatches(Harmony harmony)
+    {
+        MethodInfo target = AccessTools.Method(typeof(DataExtensions), nameof(DataExtensions.Update),
+            new[] { typeof(Player), typeof(CombatSimPlayerUpdate) }) ??
+            throw new MissingMethodException(typeof(DataExtensions).FullName, nameof(DataExtensions.Update));
+        MethodInfo prefix = AccessTools.Method(
+            typeof(Plugin), nameof(CorrectLocalReplayHealthPools));
+        harmony.Patch(target, prefix: new HarmonyMethod(prefix));
+    }
+
+    private void DisposeNativeReplayPatches()
+    {
+        _localReplayHealthPoolFixActive = false;
+    }
+
+    private static bool CorrectLocalReplayHealthPools(
+        Player player, CombatSimPlayerUpdate update)
+    {
+        if (!_localReplayHealthPoolFixActive) return true;
+
+        // The current client extension applies every health adjustment to Health,
+        // regardless of AttributeChanged.  That is insufficient for a locally
+        // injected replay because no server-side state reconciliation follows it.
+        foreach (CombatSimPlayerHealthAdjustment adjustment in update.HealthAdjustments)
+        {
+            EPlayerAttributeType attribute = adjustment.AttributeChanged switch
+            {
+                EPlayerHealthChangeType.Shield => EPlayerAttributeType.Shield,
+                EPlayerHealthChangeType.Joy => EPlayerAttributeType.Joy,
+                _ => EPlayerAttributeType.Health,
+            };
+            player.Attributes.TryGetValue(attribute, out int current);
+            player.Attributes[attribute] = checked(current + adjustment.Amount);
+        }
+        foreach (KeyValuePair<EPlayerAttributeType, CombatSimPlayerAttributeUpdate> attribute
+            in update.Attributes)
+        {
+            player.Attributes[attribute.Key] = attribute.Value.CurrentValue;
+        }
+        return false;
+    }
+
     public static string ProbeNativeReplaySerialization(
         string templatePath, string projectionPath)
     {
@@ -38,6 +84,12 @@ public sealed partial class Plugin
         byte[] encoded = MessagePackSerializer.Serialize(combat, MessagePackConfig.Options);
         NetMessageCombatSim decoded = MessagePackSerializer.Deserialize<NetMessageCombatSim>(
             encoded, MessagePackConfig.Options);
+        CombatSimPlayerHealthAdjustment[] healthAdjustments = decoded.Data.Frames
+            .SelectMany(frame => new[] { frame.PlayerUpdates, frame.OpponentUpdates })
+            .Where(update => update is not null)
+            .SelectMany(update => update!.HealthAdjustments ??
+                new List<CombatSimPlayerHealthAdjustment>())
+            .ToArray();
         return JsonSerializer.Serialize(new
         {
             TemplateSpawnEvents = spawn.Data.Events.Count,
@@ -56,6 +108,9 @@ public sealed partial class Plugin
                 update => update.Attributes.ContainsKey(ECardAttributeType.Cooldown))),
             StateUpdates = decoded.Data.Frames.Sum(frame => frame.CardUpdates.Values.Count(
                 update => update.State is not null)),
+            ShieldAdjustments = healthAdjustments.Count(update =>
+                update.AttributeChanged == EPlayerHealthChangeType.Shield),
+            CriticalAdjustments = healthAdjustments.Count(update => update.IsCrit),
             decoded.Data.Winner,
             decoded.Data.Loser,
         });
@@ -121,21 +176,27 @@ public sealed partial class Plugin
             MethodInfo replay = runtimeType.GetMethod("ReplayImportedBattle",
                     BindingFlags.Public | BindingFlags.Instance) ??
                 throw new MissingMethodException(runtimeType.FullName, "ReplayImportedBattle");
+            _localReplayHealthPoolFixActive = true;
             bool accepted = (bool)(replay.Invoke(runtime,
                 new object[] { manifest, payload, false }) ?? false);
             if (!accepted)
+            {
+                _localReplayHealthPoolFixActive = false;
                 throw new InvalidOperationException(
                     "BPP rejected playback; return to the main menu and retry");
+            }
             _lineupStatus = "BPP accepted local replay; entering playback...";
         }
         catch (TargetInvocationException exception)
         {
+            _localReplayHealthPoolFixActive = false;
             Exception actual = exception.InnerException ?? exception;
             _lineupStatus = "Cannot start BPP playback: " + actual.Message;
             Logger.LogError("native local replay failed: " + actual);
         }
         catch (Exception exception)
         {
+            _localReplayHealthPoolFixActive = false;
             _lineupStatus = "Cannot start BPP playback: " + exception.Message;
             Logger.LogError("native local replay failed: " + exception);
         }
