@@ -22,7 +22,7 @@ public sealed partial class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "com.bazaarlab.plugin";
     public const string PluginName = "BazaarLab";
-    public const string PluginVersion = "1.0.8";
+    public const string PluginVersion = "1.0.9";
 
     private static Plugin? _instance;
     private Harmony? _harmony;
@@ -32,6 +32,7 @@ public sealed partial class Plugin : BaseUnityPlugin
     private string? _latestCaptureId;
     private DateTime _nextLiveInventoryCaptureUtc;
     private string? _lastLiveInventoryPayload;
+    private PersistentPredictionWorker? _predictionWorker;
 
     private static bool IsCombatOrReplayActive()
     {
@@ -78,6 +79,8 @@ public sealed partial class Plugin : BaseUnityPlugin
         Directory.CreateDirectory(_outputDirectory);
         InitializeArtifactStorage();
         InitializeCatalogManager();
+        _predictionWorker = new PersistentPredictionWorker();
+        InitializeNativeSettingsControls();
         InitializePlacementControls();
         InitializeMonsterCombatControls();
         InitializeBaselineCurveControls();
@@ -102,6 +105,8 @@ public sealed partial class Plugin : BaseUnityPlugin
     private void OnDestroy()
     {
         DisposeCatalogManager();
+        _predictionWorker?.Dispose();
+        _predictionWorker = null;
         DisposePlacementControls();
         DisposeMonsterCombatControls();
         DisposeBaselineCurveControls();
@@ -117,6 +122,7 @@ public sealed partial class Plugin : BaseUnityPlugin
     private void Update()
     {
         UpdateCatalogManager();
+        WarmPredictionWorker();
         UpdateRunArtifactLifecycle();
         UpdateLineupDuelControls();
         UpdateDecisionTrace();
@@ -139,6 +145,20 @@ public sealed partial class Plugin : BaseUnityPlugin
         {
             Logger.LogWarning($"live inventory capture skipped: {exception.GetType().Name}: " +
                 exception.Message);
+        }
+    }
+
+    private void WarmPredictionWorker()
+    {
+        if (_predictionWorker is null || !MonsterSimulationEnabled ||
+            !CanUseCatalog(out _)) return;
+        try
+        {
+            _predictionWorker.Warm(GetRuntimeFile("BazaarLab.Combat.dll"), GetCatalogFile());
+        }
+        catch (Exception exception)
+        {
+            Logger.LogWarning("prediction worker warm-up failed: " + exception.Message);
         }
     }
 

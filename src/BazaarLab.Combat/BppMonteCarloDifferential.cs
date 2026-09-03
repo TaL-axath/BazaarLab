@@ -59,15 +59,28 @@ public static class BppMonteCarloDifferential
     private readonly record struct FixedPredictionSample(
         string? BattleId,
         IReadOnlyList<string> SkippedCards,
-        CombatSimulationResult Simulation);
+        CombatSimulationOutcome Simulation);
 
     public static BppPredictionResult Predict(
         string snapshotPath,
         OfficialCardCatalog catalog,
         int baseSeed,
         int samples,
+        int maximumTicks)
+    {
+        string json = File.ReadAllText(snapshotPath);
+        return PredictJson(json, Path.GetFileNameWithoutExtension(snapshotPath), catalog,
+            baseSeed, samples, maximumTicks);
+    }
+
+    public static BppPredictionResult PredictJson(
+        string snapshotJson,
+        string fallbackBattleId,
+        OfficialCardCatalog catalog,
+        int baseSeed,
+        int samples,
         int maximumTicks) => PredictCore(
-            snapshotPath, catalog, baseSeed, samples, samples, samples,
+            snapshotJson, fallbackBattleId, catalog, baseSeed, samples, samples, samples,
             maximumTicks, adaptive: false);
 
     public static BppPredictionResult PredictAdaptive(
@@ -84,12 +97,14 @@ public static class BppMonteCarloDifferential
             throw new ArgumentOutOfRangeException(nameof(minimumSamples),
                 "adaptive samples require 0 < minimum <= maximum and batch > 0");
         }
-        return PredictCore(snapshotPath, catalog, baseSeed, minimumSamples,
+        return PredictCore(File.ReadAllText(snapshotPath),
+            Path.GetFileNameWithoutExtension(snapshotPath), catalog, baseSeed, minimumSamples,
             maximumSamples, batchSamples, maximumTicks, adaptive: true);
     }
 
     private static BppPredictionResult PredictCore(
-        string snapshotPath,
+        string snapshotJson,
+        string fallbackBattleId,
         OfficialCardCatalog catalog,
         int baseSeed,
         int minimumSamples,
@@ -98,9 +113,9 @@ public static class BppMonteCarloDifferential
         int maximumTicks,
         bool adaptive)
     {
-        string battleId = Path.GetFileNameWithoutExtension(snapshotPath);
+        string battleId = fallbackBattleId;
         BppSnapshotValidationReport validation =
-            BppSnapshotValidator.ValidateLive(snapshotPath, catalog);
+            BppSnapshotValidator.ValidateLiveJson(snapshotJson, catalog);
         if (!validation.PredictionReady)
         {
             return new BppPredictionResult(
@@ -111,7 +126,7 @@ public static class BppMonteCarloDifferential
         }
         if (!adaptive)
         {
-            return PredictFixedParallel(snapshotPath, catalog, baseSeed, maximumSamples,
+            return PredictFixedParallel(snapshotJson, catalog, baseSeed, maximumSamples,
                 maximumTicks, battleId, validation);
         }
         int playerWins = 0;
@@ -123,7 +138,8 @@ public static class BppMonteCarloDifferential
         var skippedCards = new HashSet<string>(StringComparer.Ordinal);
         for (int sample = 0; sample < maximumSamples; sample++)
         {
-            BppSnapshotImportResult imported = BppCombatSnapshotAdapter.Import(snapshotPath, catalog);
+            BppSnapshotImportResult imported = BppCombatSnapshotAdapter.ImportJson(
+                snapshotJson, catalog);
             battleId = imported.BattleId ?? battleId;
             foreach (string skippedCard in imported.SkippedCards)
             {
@@ -176,7 +192,7 @@ public static class BppMonteCarloDifferential
     }
 
     private static BppPredictionResult PredictFixedParallel(
-        string snapshotPath,
+        string snapshotJson,
         OfficialCardCatalog catalog,
         int baseSeed,
         int samples,
@@ -184,16 +200,18 @@ public static class BppMonteCarloDifferential
         string fallbackBattleId,
         BppSnapshotValidationReport validation)
     {
+        BppSnapshotImportResult imported = BppCombatSnapshotAdapter.ImportJson(
+            snapshotJson, catalog);
         var results = new FixedPredictionSample[samples];
         Parallel.For(0, samples, new ParallelOptions
         {
-            MaxDegreeOfParallelism = Math.Max(1, Math.Min(8, Environment.ProcessorCount)),
+            MaxDegreeOfParallelism = Math.Max(1,
+                Math.Min(samples, Math.Min(16, Environment.ProcessorCount))),
         }, sample =>
         {
-            BppSnapshotImportResult imported =
-                BppCombatSnapshotAdapter.Import(snapshotPath, catalog);
-            CombatSimulationResult simulation = CombatSimulation.RunIndexed(
-                imported.State, unchecked((uint)baseSeed), sample, maximumTicks);
+            CombatState state = CloneInitialState(imported.State);
+            CombatSimulationOutcome simulation = CombatSimulation.RunOutcomeIndexed(
+                state, unchecked((uint)baseSeed), sample, maximumTicks);
             results[sample] = new FixedPredictionSample(
                 imported.BattleId, imported.SkippedCards, simulation);
         });
@@ -241,6 +259,70 @@ public static class BppMonteCarloDifferential
             runtimeErrors,
             validation.Warnings,
             skippedCards.ToArray());
+    }
+
+    private static CombatState CloneInitialState(CombatState source)
+    {
+        var clone = new CombatState
+        {
+            CardCatalog = source.CardCatalog,
+            CardAttributesArePrecomputed = source.CardAttributesArePrecomputed,
+        };
+        clone.Sandstorm.Enabled = source.Sandstorm.Enabled;
+        var owners = new Dictionary<CombatantState, CombatantState>();
+        foreach (CombatantState combatant in source.Combatants)
+        {
+            var copy = new CombatantState
+            {
+                Id = combatant.Id,
+                Hero = combatant.Hero,
+                AttributesArePrecomputed = combatant.AttributesArePrecomputed,
+                MaxHealth = combatant.MaxHealth,
+                Health = combatant.Health,
+                Shield = combatant.Shield,
+                Poison = combatant.Poison,
+                Burn = combatant.Burn,
+                Regen = combatant.Regen,
+                DamageReductionPercent = combatant.DamageReductionPercent,
+                FlatDamageReduction = combatant.FlatDamageReduction,
+                InitialTempoCooldownMilliseconds = combatant.InitialTempoCooldownMilliseconds,
+                TempoCooldownRemainingMilliseconds = combatant.TempoCooldownRemainingMilliseconds,
+            };
+            foreach ((string key, int value) in combatant.IntrinsicAttributes)
+                copy.IntrinsicAttributes[key] = value;
+            foreach ((string key, int value) in combatant.Attributes)
+                copy.Attributes[key] = value;
+            clone.Combatants.Add(copy);
+            owners[combatant] = copy;
+        }
+        foreach (CombatantState combatant in source.Combatants)
+        {
+            foreach (CombatCardState card in combatant.Cards)
+            {
+                CombatCardState copy = CombatCardState.Create(card.InstanceId,
+                    card.Definition, owners[combatant], card.BoardPosition,
+                    card.Section, card.Span);
+                copy.CooldownRemainingMilliseconds = card.CooldownRemainingMilliseconds;
+                copy.IsDisabled = card.IsDisabled;
+                copy.IsDestroyed = card.IsDestroyed;
+                copy.AttributesArePrecomputed = card.AttributesArePrecomputed;
+                copy.IntrinsicAttributes.Clear();
+                copy.Attributes.Clear();
+                copy.IntrinsicTags.Clear();
+                copy.Tags.Clear();
+                copy.IntrinsicHiddenTags.Clear();
+                copy.HiddenTags.Clear();
+                foreach ((string key, int value) in card.IntrinsicAttributes)
+                    copy.IntrinsicAttributes[key] = value;
+                foreach ((string key, int value) in card.Attributes)
+                    copy.Attributes[key] = value;
+                copy.IntrinsicTags.UnionWith(card.IntrinsicTags);
+                copy.Tags.UnionWith(card.Tags);
+                copy.IntrinsicHiddenTags.UnionWith(card.IntrinsicHiddenTags);
+                copy.HiddenTags.UnionWith(card.HiddenTags);
+            }
+        }
+        return clone;
     }
 
     public static BppMonteCarloReport Run(

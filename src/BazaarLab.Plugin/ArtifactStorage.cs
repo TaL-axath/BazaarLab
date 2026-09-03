@@ -205,9 +205,9 @@ public sealed partial class Plugin
     {
         if (_baselineProcess is not null) CancelBaselineCalculationForCombat();
         else FinishBaselineArtifacts(false, reason, null);
-        if (_monsterProcess is not null) CancelMonsterCalculationForCombat();
+        if (IsMonsterCalculating) CancelMonsterCalculationForCombat();
         else FinishMonsterArtifacts(false, reason, null);
-        if (_encounterPreviewProcess is not null || _encounterPreviewQueue.Count > 0)
+        if (IsEncounterPreviewCalculating)
             CancelEncounterPreviewsForCombat();
         else
             FinishEncounterPreviewArtifacts(false, reason, null);

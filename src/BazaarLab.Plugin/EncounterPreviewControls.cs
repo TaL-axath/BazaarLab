@@ -23,6 +23,7 @@ namespace BazaarLab.Plugin;
 
 public sealed partial class Plugin
 {
+    private const string EncounterPreviewWorkerOwner = "encounter-preview";
     private sealed class EncounterPreviewEntry
     {
         public string InstanceId { get; set; } = string.Empty;
@@ -36,8 +37,6 @@ public sealed partial class Plugin
     private readonly Dictionary<string, EncounterPreviewEntry> _encounterPreviews =
         new Dictionary<string, EncounterPreviewEntry>(StringComparer.Ordinal);
     private readonly Queue<string> _encounterPreviewQueue = new Queue<string>();
-    private Process? _encounterPreviewProcess;
-    private StringBuilder? _encounterPreviewLog;
     private string? _encounterPreviewRunningId;
     private string? _encounterPreviewRunningFingerprint;
     private string? _encounterPreviewInputPath;
@@ -108,7 +107,8 @@ public sealed partial class Plugin
             new Dictionary<string, int>(StringComparer.Ordinal);
     }
 
-    private bool IsEncounterPreviewCalculating => _encounterPreviewProcess is not null ||
+    private bool IsEncounterPreviewCalculating =>
+        _predictionWorker?.IsOwnedBy(EncounterPreviewWorkerOwner) == true ||
         _encounterPreviewQueue.Count > 0;
 
     private void InitializeEncounterPreviewControls()
@@ -119,20 +119,7 @@ public sealed partial class Plugin
 
     private void DisposeEncounterPreviewControls()
     {
-        if (_encounterPreviewProcess is not null)
-        {
-            try
-            {
-                if (!_encounterPreviewProcess.HasExited) _encounterPreviewProcess.Kill();
-            }
-            catch (Exception)
-            {
-                // Process may have exited between checks.
-            }
-            _encounterPreviewProcess.Dispose();
-            _encounterPreviewProcess = null;
-        }
-        _encounterPreviewLog = null;
+        _predictionWorker?.Cancel(EncounterPreviewWorkerOwner);
         _encounterPreviewRunningId = null;
         _encounterPreviewRunningFingerprint = null;
         FinishEncounterPreviewArtifacts(false, "plugin shutdown", null);
@@ -142,6 +129,11 @@ public sealed partial class Plugin
 
     private void UpdateEncounterPreviewControls()
     {
+        if (!MonsterSimulationEnabled)
+        {
+            if (IsEncounterPreviewCalculating) CancelEncounterPreviewsForCombat();
+            return;
+        }
         if (IsCombatOrReplayActive())
         {
             if (!_encounterPreviewCombatSuppressed)
@@ -158,7 +150,7 @@ public sealed partial class Plugin
             _nextEncounterPreviewProbeAt = Time.realtimeSinceStartup + 0.35f;
             ProbeEncounterChoices();
         }
-        if (_encounterPreviewProcess is null && _encounterPreviewQueue.Count > 0 &&
+        if (_predictionWorker?.IsBusy != true && _encounterPreviewQueue.Count > 0 &&
             !IsMonsterCalculating && !IsBaselineCalculating && !IsSearching && !IsMoving &&
             !IsLocalDuelCalculating &&
             !Data.IsInCombat && !CardController.IsAnyCardDragging &&
@@ -170,22 +162,7 @@ public sealed partial class Plugin
 
     private void CancelEncounterPreviewsForCombat()
     {
-        Process? process = _encounterPreviewProcess;
-        if (process is not null)
-        {
-            try
-            {
-                if (!process.HasExited) process.Kill();
-            }
-            catch (Exception exception)
-            {
-                Logger.LogWarning("cannot stop encounter preview on combat entry: " +
-                    exception.Message);
-            }
-            process.Dispose();
-        }
-        _encounterPreviewProcess = null;
-        _encounterPreviewLog = null;
+        _predictionWorker?.Cancel(EncounterPreviewWorkerOwner);
         _encounterPreviewRunningId = null;
         _encounterPreviewRunningFingerprint = null;
         FinishEncounterPreviewArtifacts(false, "preview cancelled", null);
@@ -197,6 +174,7 @@ public sealed partial class Plugin
 
     private void ProbeEncounterChoices()
     {
+        if (!MonsterSimulationEnabled) return;
         EncounterController[] controllers = FindObjectsByType<EncounterController>(
                 FindObjectsSortMode.None)
             .Where(controller => controller is not null && controller.gameObject.activeInHierarchy &&
@@ -322,7 +300,6 @@ public sealed partial class Plugin
             if (!_encounterPreviews.TryGetValue(id, out EncounterPreviewEntry? entry)) continue;
             try
             {
-                string gameRoot = Paths.GameRootPath;
                 string core = GetRuntimeFile("BazaarLab.Combat.dll");
                 string catalog = GetCatalogFile();
                 if (!File.Exists(core) || !File.Exists(catalog))
@@ -337,43 +314,17 @@ public sealed partial class Plugin
                     "encounter-preview-result-" + stamp + "-" + SafeFileId(id) + ".json");
                 File.WriteAllText(_encounterPreviewInputPath,
                     BuildEncounterPreviewJson(entry) + Environment.NewLine);
-                string dotnetExecutable = Path.Combine(Environment.GetFolderPath(
-                    Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
-                if (!File.Exists(dotnetExecutable)) dotnetExecutable = "dotnet";
-                var output = new StringBuilder();
-                var start = new ProcessStartInfo
+                string workerError = "prediction worker is unavailable";
+                if (_predictionWorker is null || !_predictionWorker.TryStart(
+                        EncounterPreviewWorkerOwner, core, catalog,
+                        _encounterPreviewInputPath, _encounterPreviewResultPath,
+                        out workerError))
                 {
-                    FileName = dotnetExecutable,
-                    Arguments = Quote(core) + " predict-bpp " + Quote(catalog) + " " +
-                        Quote(_encounterPreviewInputPath) + " 20260831 50 2400 " +
-                        Quote(_encounterPreviewResultPath),
-                    WorkingDirectory = Path.GetDirectoryName(core) ?? gameRoot,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                };
-                var process = new Process { StartInfo = start, EnableRaisingEvents = false };
-                process.OutputDataReceived += (_, args) =>
-                {
-                    if (args.Data is not null) lock (output) output.AppendLine(args.Data);
-                };
-                process.ErrorDataReceived += (_, args) =>
-                {
-                    if (args.Data is not null) lock (output) output.AppendLine(args.Data);
-                };
-                if (!process.Start())
-                {
-                    process.Dispose();
-                    entry.Status = "Start failed";
-                    FinishEncounterPreviewArtifacts(true, entry.Status, null);
+                    entry.Status = "Start failed: " + workerError;
+                    FinishEncounterPreviewArtifacts(true, entry.Status, workerError);
                     continue;
                 }
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
                 entry.Status = "Calculating...";
-                _encounterPreviewProcess = process;
-                _encounterPreviewLog = output;
                 _encounterPreviewRunningId = id;
                 _encounterPreviewRunningFingerprint = _encounterPreviewAppliedFingerprint;
                 return;
@@ -772,22 +723,13 @@ public sealed partial class Plugin
 
     private void PollEncounterPreview()
     {
-        Process? process = _encounterPreviewProcess;
-        if (process is null || !process.HasExited) return;
+        if (_predictionWorker is null ||
+            !_predictionWorker.TryTakeCompletion(EncounterPreviewWorkerOwner,
+                out bool succeeded, out string log)) return;
         string? id = _encounterPreviewRunningId;
         string? runningFingerprint = _encounterPreviewRunningFingerprint;
         try
         {
-            process.WaitForExit();
-            int exitCode = process.ExitCode;
-            string log = string.Empty;
-            if (_encounterPreviewLog is not null)
-            {
-                lock (_encounterPreviewLog) log = _encounterPreviewLog.ToString();
-            }
-            process.Dispose();
-            _encounterPreviewProcess = null;
-            _encounterPreviewLog = null;
             _encounterPreviewRunningId = null;
             _encounterPreviewRunningFingerprint = null;
             if (!string.Equals(runningFingerprint, _encounterPreviewAppliedFingerprint,
@@ -801,10 +743,10 @@ public sealed partial class Plugin
                 FinishEncounterPreviewArtifacts(false, "preview no longer visible", null);
                 return;
             }
-            if (exitCode != 0 || string.IsNullOrEmpty(_encounterPreviewResultPath) ||
+            if (!succeeded || string.IsNullOrEmpty(_encounterPreviewResultPath) ||
                 !File.Exists(_encounterPreviewResultPath))
             {
-                Logger.LogWarning("encounter-preview process failed (exit " + exitCode + "):\n" + log);
+                Logger.LogWarning("encounter-preview worker failed:\n" + log);
                 entry.Status = "Failed: " + LastLine(log);
                 FinishEncounterPreviewArtifacts(true, entry.Status, log);
                 return;
@@ -848,9 +790,6 @@ public sealed partial class Plugin
         }
         catch (Exception exception)
         {
-            process.Dispose();
-            _encounterPreviewProcess = null;
-            _encounterPreviewLog = null;
             _encounterPreviewRunningId = null;
             _encounterPreviewRunningFingerprint = null;
             if (!string.Equals(runningFingerprint, _encounterPreviewAppliedFingerprint,

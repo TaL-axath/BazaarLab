@@ -14,8 +14,7 @@ namespace BazaarLab.Plugin;
 
 public sealed partial class Plugin
 {
-    private Process? _monsterProcess;
-    private StringBuilder? _monsterProcessLog;
+    private const string MonsterWorkerOwner = "monster";
     private string? _monsterInputPath;
     private string? _monsterResultPath;
     private string? _monsterInputPayload;
@@ -43,7 +42,8 @@ public sealed partial class Plugin
         public string ResultJson { get; set; } = string.Empty;
     }
 
-    private bool IsMonsterCalculating => _monsterProcess is not null;
+    private bool IsMonsterCalculating =>
+        _predictionWorker?.IsOwnedBy(MonsterWorkerOwner) == true;
 
     private void InitializeMonsterCombatControls()
     {
@@ -52,26 +52,18 @@ public sealed partial class Plugin
 
     private void DisposeMonsterCombatControls()
     {
-        if (_monsterProcess is null)
-        {
-            return;
-        }
-        try
-        {
-            if (!_monsterProcess.HasExited) _monsterProcess.Kill();
-        }
-        catch (Exception)
-        {
-            // Process may have exited between checks.
-        }
-        _monsterProcess.Dispose();
-        _monsterProcess = null;
-        _monsterProcessLog = null;
+        _predictionWorker?.Cancel(MonsterWorkerOwner);
         FinishMonsterArtifacts(false, "plugin shutdown", null);
     }
 
     private void UpdateMonsterCombatControls()
     {
+        if (!MonsterSimulationEnabled)
+        {
+            if (IsMonsterCalculating) CancelMonsterCalculationForCombat();
+            _monsterResult = null;
+            return;
+        }
         if (IsCombatOrReplayActive())
         {
             if (!_monsterCombatSuppressed)
@@ -118,7 +110,7 @@ public sealed partial class Plugin
 
     private void DrawMonsterCombatControls()
     {
-        if (Data.Run?.Player is null) return;
+        if (!MonsterSimulationEnabled || Data.Run?.Player is null) return;
         bool encounterReady = !IsCombatOrReplayActive() && IsLiveMonsterEncounterReady();
         DrawMonsterHeadOverlay(encounterReady);
     }
@@ -133,20 +125,8 @@ public sealed partial class Plugin
 
     private void CancelMonsterCalculationForCombat()
     {
-        Process? process = _monsterProcess;
-        if (process is null) return;
-        try
-        {
-            if (!process.HasExited) process.Kill();
-        }
-        catch (Exception exception)
-        {
-            Logger.LogWarning("cannot stop monster calculation on combat entry: " +
-                exception.Message);
-        }
-        process.Dispose();
-        _monsterProcess = null;
-        _monsterProcessLog = null;
+        if (!IsMonsterCalculating) return;
+        _predictionWorker?.Cancel(MonsterWorkerOwner);
         FinishMonsterArtifacts(false, "combat started", null);
         _monsterStatus = "战斗中，已暂停野怪计算";
     }
@@ -205,7 +185,8 @@ public sealed partial class Plugin
 
     private void StartMonsterCalculation(bool automatic)
     {
-        if (IsMonsterCalculating || IsSearching || IsMoving || IsBaselineCalculating ||
+        if (!MonsterSimulationEnabled || IsMonsterCalculating || IsSearching ||
+            IsMoving || IsBaselineCalculating ||
             IsLocalDuelCalculating)
         {
             return;
@@ -248,43 +229,16 @@ public sealed partial class Plugin
             File.Copy(liveInput, _monsterInputPath, overwrite: false);
             _monsterResultPath = TemporaryArtifactFile("monster",
                 "monster-result-" + stamp + ".json");
-            string dotnetExecutable = Path.Combine(Environment.GetFolderPath(
-                Environment.SpecialFolder.ProgramFiles), "dotnet", "dotnet.exe");
-            if (!File.Exists(dotnetExecutable)) dotnetExecutable = "dotnet";
-            var output = new StringBuilder();
-            var start = new ProcessStartInfo
+            string workerError = "prediction worker is unavailable";
+            if (_predictionWorker is null || !_predictionWorker.TryStart(
+                    MonsterWorkerOwner, core, catalog, _monsterInputPath,
+                    _monsterResultPath, out workerError))
             {
-                FileName = dotnetExecutable,
-                Arguments = Quote(core) + " predict-bpp " + Quote(catalog) + " " +
-                    Quote(_monsterInputPath) + " 20260831 50 2400 " +
-                    Quote(_monsterResultPath),
-                WorkingDirectory = Path.GetDirectoryName(core) ?? Paths.GameRootPath,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
-            var process = new Process { StartInfo = start, EnableRaisingEvents = false };
-            process.OutputDataReceived += (_, args) =>
-            {
-                if (args.Data is not null) lock (output) output.AppendLine(args.Data);
-            };
-            process.ErrorDataReceived += (_, args) =>
-            {
-                if (args.Data is not null) lock (output) output.AppendLine(args.Data);
-            };
-            if (!process.Start())
-            {
-                process.Dispose();
-                SetMonsterStatus("Failed to start local combat process");
+                SetMonsterStatus("Failed to start local combat worker: " + workerError);
                 _monsterCompletedPayload = _monsterInputPayload;
                 FinishMonsterArtifacts(true, _monsterStatus, null);
                 return;
             }
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-            _monsterProcess = process;
-            _monsterProcessLog = output;
             SetMonsterStatus((automatic ? "Auto: " : string.Empty) +
                 $"simulating {monsterItems.Length} monster items...");
         }
@@ -298,33 +252,16 @@ public sealed partial class Plugin
 
     private void PollMonsterCalculation()
     {
-        Process? process = _monsterProcess;
-        if (process is null)
-        {
-            return;
-        }
+        if (_predictionWorker is null ||
+            !_predictionWorker.TryTakeCompletion(MonsterWorkerOwner,
+                out bool succeeded, out string log)) return;
         try
         {
-            if (!process.HasExited)
-            {
-                return;
-            }
-            process.WaitForExit();
-            int exitCode = process.ExitCode;
-            string log = string.Empty;
-            if (_monsterProcessLog is not null)
-            {
-                lock (_monsterProcessLog) log = _monsterProcessLog.ToString();
-            }
-            process.Dispose();
-            _monsterProcess = null;
-            _monsterProcessLog = null;
-            if (exitCode != 0 || string.IsNullOrEmpty(_monsterResultPath) ||
+            if (!succeeded || string.IsNullOrEmpty(_monsterResultPath) ||
                 !File.Exists(_monsterResultPath))
             {
-                Logger.LogWarning("monster-combat process failed (exit " + exitCode + "):\n" + log);
-                SetMonsterStatus("Combat process failed (exit " + exitCode + "): " +
-                    LastLine(log));
+                Logger.LogWarning("monster-combat worker failed:\n" + log);
+                SetMonsterStatus("Combat worker failed: " + LastLine(log));
                 _monsterCompletedPayload = _monsterInputPayload;
                 FinishMonsterArtifacts(true, _monsterStatus, log);
                 return;
@@ -376,9 +313,6 @@ public sealed partial class Plugin
         }
         catch (Exception exception)
         {
-            process.Dispose();
-            _monsterProcess = null;
-            _monsterProcessLog = null;
             SetMonsterStatus("Cannot load combat result: " + exception.Message);
             _monsterCompletedPayload = _monsterInputPayload;
             FinishMonsterArtifacts(true, _monsterStatus, exception.ToString());

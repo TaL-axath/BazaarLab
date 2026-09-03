@@ -167,7 +167,7 @@ public sealed partial class Plugin
     private void UpdatePlacementWindow()
     {
         if (_placementUi is null) return;
-        bool visible = Data.Run?.Player is not null;
+        bool visible = ShowPlacementWindow && Data.Run?.Player is not null;
         _placementUi.Root.gameObject.SetActive(visible);
         if (!visible) return;
         bool hasResult = _placementResult?.Recommendation?.Board is { Count: > 0 };
@@ -248,7 +248,7 @@ public sealed partial class Plugin
     private void UpdateBaselineWindow()
     {
         if (_baselineUi is null) return;
-        bool visible = Data.Run?.Player is not null &&
+        bool visible = ShowBaselineWindow && Data.Run?.Player is not null &&
             _baselineResult?.Points is { Count: > 1 };
         _baselineUi.Root.gameObject.SetActive(visible);
         if (!visible || _baselineResult is null) return;
@@ -340,7 +340,8 @@ public sealed partial class Plugin
     private void UpdateLineupWindow()
     {
         if (_lineupUi is null) return;
-        _lineupUi.Root.gameObject.SetActive(true);
+        _lineupUi.Root.gameObject.SetActive(ShowLineupWindow);
+        if (!ShowLineupWindow) return;
         SetWindowState(_lineupUi, _lineupWindowMinimized,
             _lineupWindowMinimized ? 34f : 574f);
         SyncInput(_lineupInputA, _lineupCodeA);

@@ -195,6 +195,14 @@ if (args.Length == 4 && string.Equals(args[0], "serve-bpp", StringComparison.Ord
     return;
 }
 
+if (args.Length == 5 && string.Equals(
+    args[0], "serve-bpp-fixed-files", StringComparison.OrdinalIgnoreCase))
+{
+    FixedPredictionServer.Run(args[1], int.Parse(args[2]), int.Parse(args[3]),
+        int.Parse(args[4]));
+    return;
+}
+
 if (args.Length == 5 && string.Equals(args[0], "coverage-bpp", StringComparison.OrdinalIgnoreCase))
 {
     OfficialCardCatalog catalog = OfficialCardCatalog.LoadJsonLines(args[1]);

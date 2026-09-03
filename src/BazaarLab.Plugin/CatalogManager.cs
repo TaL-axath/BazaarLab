@@ -444,6 +444,7 @@ public sealed partial class Plugin
 
     private void InvalidateCatalogConsumers()
     {
+        _predictionWorker?.Invalidate();
         _baselineCandidateFingerprint = null;
         _baselineRunningFingerprint = null;
         _baselineResult = null;

@@ -28,8 +28,36 @@ public sealed record CombatSimulationResult(
     IReadOnlyList<CombatCardAttributeTransition> CardAttributeTrace,
     string EventSha256);
 
+public sealed record CombatSimulationOutcome(
+    string? WinnerId,
+    IReadOnlyDictionary<string, int> UnsupportedActions);
+
 public static class CombatSimulation
 {
+    public static CombatSimulationOutcome RunOutcomeIndexed(
+        CombatState state, uint masterSeed, int runIndex, int maximumTicks)
+    {
+        uint effectiveSeed = SeedMixer.Mix(masterSeed, runIndex);
+        var random = new XorShiftCombatRandom(effectiveSeed);
+        var rules = new CombatRuleRuntime(state, random);
+        var scheduler = new CombatScheduler(state, rules, random);
+        scheduler.StartFight();
+        int advanced = 0;
+        while (advanced < maximumTicks && state.Combatants.Count(value => value.Health > 0) > 1)
+        {
+            scheduler.AdvanceOneTick();
+            advanced++;
+        }
+        string? winner = state.Combatants.Count(value => value.Health > 0) == 1
+            ? state.Combatants.Single(value => value.Health > 0).Id
+            : null;
+        Dictionary<string, int> unsupported = state.Events
+            .Where(value => value.Kind.StartsWith("UnsupportedAction:", StringComparison.Ordinal))
+            .GroupBy(value => value.Kind["UnsupportedAction:".Length..], StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        return new CombatSimulationOutcome(winner, unsupported);
+    }
+
     public static CombatSimulationResult Run(
         CombatState state, int seed, int maximumTicks, bool captureReplayTrace = false)
         => RunIndexed(state, unchecked((uint)seed), 0, maximumTicks, captureReplayTrace);

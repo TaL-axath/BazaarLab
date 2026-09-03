@@ -55,6 +55,8 @@ $arguments += @(
     (Join-Path $projectDirectory 'Plugin.cs'),
     (Join-Path $projectDirectory 'ArtifactStorage.cs'),
     (Join-Path $projectDirectory 'CatalogManager.cs'),
+    (Join-Path $projectDirectory 'PersistentPredictionWorker.cs'),
+    (Join-Path $projectDirectory 'NativeSettingsControls.cs'),
     (Join-Path $projectDirectory 'PlacementControls.cs'),
     (Join-Path $projectDirectory 'MonsterCombatControls.cs'),
     (Join-Path $projectDirectory 'BaselineCurveControls.cs'),
